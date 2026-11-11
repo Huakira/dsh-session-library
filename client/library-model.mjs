@@ -1,4 +1,4 @@
-export const CONFIG_DEFAULTS = Object.freeze({ sidebarLimit: 30, pageSize: 50, sidebarGrouping: 'folders', groupLimit: 5, libraryView: 'list' });
+export const CONFIG_DEFAULTS = Object.freeze({ sidebarLimit: 30, pageSize: 50, sidebarGrouping: 'folders', groupLimit: 5, libraryView: 'list', sidebarSessionHeight: 'auto' });
 export function normalizeConfig(value) {
   return {
     sidebarLimit: Math.min(100, Math.max(5, Math.floor(Number(value?.sidebarLimit) || 30))),
@@ -6,6 +6,7 @@ export function normalizeConfig(value) {
     sidebarGrouping: ['folders', 'projects', 'recent'].includes(value?.sidebarGrouping) ? value.sidebarGrouping : 'folders',
     groupLimit: [3, 5, 10].includes(Number(value?.groupLimit)) ? Number(value.groupLimit) : 5,
     libraryView: value?.libraryView === 'folders' ? 'folders' : 'list',
+    sidebarSessionHeight: ['auto', 'large', 'larger', 'max'].includes(value?.sidebarSessionHeight) ? value.sidebarSessionHeight : 'auto',
   };
 }
 export function libraryRows(sessions, workspaces, filters = {}, hits = [], folderState = {}) {
