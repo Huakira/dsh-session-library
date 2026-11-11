@@ -1,12 +1,13 @@
 export const CONFIG_DEFAULTS = Object.freeze({ sidebarLimit: 30, pageSize: 50, sidebarGrouping: 'folders', groupLimit: 5, libraryView: 'list', sidebarSessionHeight: 'auto' });
 export function normalizeConfig(value) {
+  const heightNumber = Number(value?.sidebarSessionHeight);
   return {
     sidebarLimit: Math.min(100, Math.max(5, Math.floor(Number(value?.sidebarLimit) || 30))),
     pageSize: [25, 50, 100].includes(Number(value?.pageSize)) ? Number(value.pageSize) : 50,
     sidebarGrouping: ['folders', 'projects', 'recent'].includes(value?.sidebarGrouping) ? value.sidebarGrouping : 'folders',
     groupLimit: [3, 5, 10].includes(Number(value?.groupLimit)) ? Number(value.groupLimit) : 5,
     libraryView: value?.libraryView === 'folders' ? 'folders' : 'list',
-    sidebarSessionHeight: ['auto', 'large', 'larger', 'max'].includes(value?.sidebarSessionHeight) ? value.sidebarSessionHeight : 'auto',
+    sidebarSessionHeight: value?.sidebarSessionHeight === 'auto' || !Number.isFinite(heightNumber) ? 'auto' : Math.min(90, Math.max(20, Math.round(heightNumber))),
   };
 }
 export function libraryRows(sessions, workspaces, filters = {}, hits = [], folderState = {}) {

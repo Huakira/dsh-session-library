@@ -36,8 +36,10 @@ test('config normalizes unsupported values and caps DOM page sizes',()=>{
  assert.deepEqual(normalizeConfig(null),{sidebarLimit:30,pageSize:50,sidebarGrouping:'folders',groupLimit:5,libraryView:'list',sidebarSessionHeight:'auto'});
  assert.deepEqual(normalizeConfig({sidebarGrouping:'projects',groupLimit:10,libraryView:'folders',sidebarSessionHeight:'auto'}),{sidebarLimit:30,pageSize:50,sidebarGrouping:'projects',groupLimit:10,libraryView:'folders',sidebarSessionHeight:'auto'});
  assert.deepEqual(normalizeConfig({sidebarGrouping:'bad',groupLimit:7,libraryView:'tree'}),{sidebarLimit:30,pageSize:50,sidebarGrouping:'folders',groupLimit:5,libraryView:'list',sidebarSessionHeight:'auto'});
- assert.deepEqual(normalizeConfig({sidebarSessionHeight:'max'}),{sidebarLimit:30,pageSize:50,sidebarGrouping:'folders',groupLimit:5,libraryView:'list',sidebarSessionHeight:'max'});
- assert.deepEqual(normalizeConfig({sidebarSessionHeight:'huge'}),{sidebarLimit:30,pageSize:50,sidebarGrouping:'folders',groupLimit:5,libraryView:'list',sidebarSessionHeight:'auto'});
+ assert.deepEqual(normalizeConfig({sidebarSessionHeight:55}),{sidebarLimit:30,pageSize:50,sidebarGrouping:'folders',groupLimit:5,libraryView:'list',sidebarSessionHeight:55});
+ assert.deepEqual(normalizeConfig({sidebarSessionHeight:10}),{sidebarLimit:30,pageSize:50,sidebarGrouping:'folders',groupLimit:5,libraryView:'list',sidebarSessionHeight:20});
+ assert.deepEqual(normalizeConfig({sidebarSessionHeight:99}),{sidebarLimit:30,pageSize:50,sidebarGrouping:'folders',groupLimit:5,libraryView:'list',sidebarSessionHeight:90});
+ assert.deepEqual(normalizeConfig({sidebarSessionHeight:'max'}),{sidebarLimit:30,pageSize:50,sidebarGrouping:'folders',groupLimit:5,libraryView:'list',sidebarSessionHeight:'auto'});
 });
 test('folder view groups by folder first, then workspace, preserving order',()=>{
  const rows=[

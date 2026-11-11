@@ -3,7 +3,7 @@ import { projectSidebarList, groupSidebarRows, visibleSidebarGroupRows } from '.
 const SIDEBAR_SLOT = 'sidebar.workspaces';
 
 /** Replace only the public browsing region; dispose reveals the official region. */
-export function installSidebar(ctx, React, { openLibrary, useConfig, useFolders, folderActions = {}, onConfigChange, workspaceRequest }) {
+export function installSidebar(ctx, React, { openLibrary, useConfig, useFolders, folderActions = {}, onConfigChange, workspaceRequest, useSessionErrors }) {
   const h = React.createElement;
   const text = (zh, en) => ctx.locale?.getSnapshot?.().active === 'zh' ? zh : en;
   const buttonStyle = { cursor: 'pointer', color: 'var(--dsw-alias-label-primary)', background: 'transparent', border: 0, borderRadius: 'var(--dsw-radius-md)', padding: '7px 9px', font: 'inherit', textAlign: 'left' };
@@ -25,6 +25,7 @@ export function installSidebar(ctx, React, { openLibrary, useConfig, useFolders,
     const list = props.useSessions(state => state);
     const workspace = props.useWorkspaces(state => state);
     const statuses = props.useSessionStatus(state => state);
+    const errored = (props.useSessionErrors ?? (() => new Set()))();
     const [filter, setFilter] = React.useState('');
     // Typing stays immediate; grouping work defers so keystrokes never wait on it.
     const needle = React.useDeferredValue(filter.trim().toLocaleLowerCase());
@@ -104,12 +105,17 @@ export function installSidebar(ctx, React, { openLibrary, useConfig, useFolders,
       const label = row.displayTitle ?? row.title ?? (row.blank ? '新会话' : row.id);
       const cwd = list.byId?.[row.id]?.cwd;
       const tip = [label, cwd ? abbreviate(cwd) : '无固定目录', row.createdAt ? `创建于 ${new Date(row.createdAt).toLocaleString()}（${relative(row.createdAt)}）` : ''].filter(Boolean).join('\n');
-      const statusIcon = state?.pendingInteraction ? icon('waiting', '等待你处理') : running ? icon('running', '正在运行') : state?.completionUnread ? icon('unread', '有新回复') : null;
+      // Colored status dot; error outranks attention, running, then unread replies.
+      const dot = errored.has(row.id) ? h('span', { className: 'dsl-status-dot dsl-status-error', role: 'img', 'aria-label': '出错', title: '会话出错' })
+        : state?.pendingInteraction ? h('span', { className: 'dsl-status-dot dsl-status-attention', role: 'img', 'aria-label': '需要你处理', title: `需要你处理（${state.pendingInteraction.kind || 'interaction'}）` })
+        : running ? h('span', { className: 'dsl-status-dot dsl-status-running', role: 'img', 'aria-label': '正在运行', title: '正在运行' })
+        : state?.completionUnread ? h('span', { className: 'dsl-status-dot dsl-status-done', role: 'img', 'aria-label': '有新回复', title: '有新回复' })
+        : h('span', { className: 'dsl-status-dot', role: 'img', 'aria-label': '空闲', title: '' });
       return h('div', { key: row.id, 'data-dsl-session-row': row.id, onContextMenu: event => menu(event, row), style: { display: 'flex', alignItems: 'center', minWidth: 0, borderRadius: 'var(--dsw-radius-md)', background: active ? 'var(--dsw-alias-interactive-bg-hover)' : 'transparent' } },
         h('button', { type: 'button', title: tip, 'aria-current': active ? 'page' : undefined, onClick: () => open(row), style: { ...buttonStyle, display: 'flex', alignItems: 'center', gap: 6, flex: 1, minWidth: 0 } },
           h('span', { style: { overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis', minWidth: 0, flex: 1 } }, label),
           pinned.has(row.id) && icon('pin', '已置顶'),
-          h('span', { 'data-dsl-status': '', style: { width: 16, height: 16, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flex: 'none' } }, statusIcon)),
+          h('span', { 'data-dsl-status': '', style: { width: 16, height: 16, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flex: 'none' } }, dot)),
         h('button', { type: 'button', 'aria-label': `会话“${label}”的操作`, onClick: event => menu(event, row), style: { ...buttonStyle, flex: 'none', padding: 6, display: 'inline-flex' } }, icon('more', '会话操作')));
     };
     const groupView = group => {
@@ -154,7 +160,7 @@ export function installSidebar(ctx, React, { openLibrary, useConfig, useFolders,
       } catch (reason) { setError(String(reason?.message ?? reason)); }
       finally { setBusy(false); }
     };
-    return h('section', { 'data-dsh-session-library-sidebar': '', 'aria-label': '会话分组', style: { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0, padding: '0 8px' } },
+    return h('section', { 'data-dsh-session-library-sidebar': '', 'aria-label': '会话分组', style: { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0, padding: '0 8px', maxHeight: 'var(--dsl-session-area-h, none)' } },
       h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 4px', gap: 6 } },
         onConfigChange ? h('span', { role: 'group', 'aria-label': text('侧栏视图', 'Sidebar view'), style: { display: 'inline-flex', flex: 1, minWidth: 0 } },
           h('button', { type: 'button', 'aria-pressed': grouping === 'recent', title: text('列表视图：最近的会话平铺显示', 'List view: recent sessions in a flat list'), onClick: () => onConfigChange({ sidebarGrouping: 'recent' }), style: { ...buttonStyle, fontSize: 12, padding: '4px 9px', border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 'var(--dsw-radius-md) 0 0 var(--dsw-radius-md)', background: grouping === 'recent' ? 'var(--dsw-alias-interactive-bg-hover)' : 'transparent' } }, text('列表', 'List')),

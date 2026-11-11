@@ -28,7 +28,7 @@ test('three thousand catalog rows create only thirty recent row components and n
   assert.equal(list.ids.length, 3188);
 });
 
-test('collapsing a group unmounts its rows and runtime indicators are separate SVG seats', () => {
+test('collapsing a group unmounts its rows; status dots mark running sessions', () => {
   let Component;
   const values = [];
   let hook = 0;
@@ -47,7 +47,7 @@ test('collapsing a group unmounts its rows and runtime indicators are separate S
   const render = () => { hook = 0; return flatten(Component(props)); };
   let all = render();
   assert.equal(all.filter(n => n.props['data-dsl-session-row']).length, 5);
-  assert.ok(all.some(n => n.type === 'svg' && n.props.className === 'dsl-runtime-spinner'));
+  assert.ok(all.some(n => n.type === 'span' && n.props.className === 'dsl-status-dot dsl-status-running' && n.props['aria-label'] === '正在运行'));
   assert.ok(all.some(n => n.type === 'svg' && n.props['aria-label'] === '已置顶'));
   const titleButton = all.find(n => n.type === 'button' && (n.props.title ?? '').startsWith('r19'));
   assert.equal(titleButton.children[0].children[0], 'r19');
