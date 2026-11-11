@@ -350,6 +350,11 @@ export function installLibrary(ctx, React) {
   // only way to give sessions more room is capping the panels list itself.
   // The aria selectors cover both locales ("Global panels" / "全局面板").
   const heightStyle = document.createElement('style'); heightStyle.id = 'dsh-session-library-sidebar-height';
+  // Labels of nav panel rows currently folded away by syncSidebarHeight. The
+  // More-menu rows list exactly these — and nothing — so the menu keeps its
+  // official content while every panel is visible in the nav, and gains the
+  // folded panels only while they are actually hidden.
+  const foldedRowLabels = new Set();
   document.head.append(heightStyle);
   // Session-area height as a percentage of the sidebar. Below the natural
   // height the session section itself is capped (its list scrolls). Above it
@@ -360,6 +365,7 @@ export function installLibrary(ctx, React) {
   const PANEL_NAV = 'nav[aria-label="Global panels"], nav[aria-label="全局面板"]';
   const syncSidebarHeight = () => {
     heightStyle.textContent = '';
+    foldedRowLabels.clear();
     document.documentElement.style.removeProperty('--dsl-session-area-h');
     const value = config.sidebarSessionHeight;
     const pct = value === 'auto' ? null : Math.min(90, Math.max(20, Math.round(Number(value))));
@@ -396,7 +402,13 @@ export function installLibrary(ctx, React) {
           hidden.push(i + 1); // 1-based nth-child index
           total -= heights[i] + gaps;
         }
-        if (hidden.length) heightStyle.textContent = hidden.map(n => `:is(${PANEL_NAV}) > :nth-child(${n}){display:none!important}`).join('');
+        if (hidden.length) {
+          heightStyle.textContent = hidden.map(n => `:is(${PANEL_NAV}) > :nth-child(${n}){display:none!important}`).join('');
+          for (const n of hidden) {
+            const child = children[n - 1];
+            if (child) foldedRowLabels.add((child.getAttribute('aria-label') || child.textContent || '').trim());
+          }
+        }
       }
     }
     document.documentElement.style.setProperty('--dsl-session-area-h', `${desired}px`);
@@ -425,8 +437,13 @@ export function installLibrary(ctx, React) {
   // out of the nav (session-area height) had no home in More. Add our own
   // row group listing every panel entry; entry-customization's rows stay.
   const PanelListActions = ({ entries, onOpen, onDismiss }) => {
+    // Only rows our height fold actually hid belong here; while every panel
+    // shows in the nav this renders nothing and the menu keeps its official
+    // content only.
+    const rows = (entries ?? []).filter(entry => foldedRowLabels.has(String(entry.label ?? '').trim()));
+    if (rows.length === 0) return null;
     return h('div', { className: 'dsl-more-menu' },
-      (entries ?? []).map(entry => h('button', {
+      rows.map(entry => h('button', {
         key: entry.id, type: 'button', className: 'dsl-more-row', 'aria-current': entry.active ? 'true' : undefined,
         onClick: () => { onDismiss?.(); onOpen?.(entry.id); },
       }, h('span', { className: 'dsl-more-label' }, entry.label), entry.active ? h('span', { className: 'dsl-more-active', 'aria-hidden': 'true' }) : null)));
