@@ -1,6 +1,11 @@
 import { normalizeConfig, libraryRows, paginateRows, groupedLibraryRows } from './library-model.mjs';
 import { installSidebar } from './sidebar.mjs';
 import { createFolderStore } from './folders.mjs';
+import { installListCoalesce } from './list-coalesce.mjs';
+
+// Install at module scope (factory call), which precedes apply() and therefore
+// the boot-time session/list pair this coalesces.
+installListCoalesce(typeof window !== 'undefined' ? window : undefined);
 
 export function installLibrary(ctx, React) {
   const h = React.createElement;
