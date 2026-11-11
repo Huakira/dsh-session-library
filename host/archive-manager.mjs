@@ -1,0 +1,170 @@
+import { failure, readPluginPost, sendJson } from './plugin-request.mjs'
+
+const SEARCH_LIMIT = 20
+const MESSAGE_TYPES = new Set(['user/message', 'assistant/message'])
+
+const assertSessionId = sessionId => {
+  if (typeof sessionId !== 'string' || sessionId.length === 0 || sessionId.length > 512 || sessionId.includes('\0')) {
+    throw new TypeError('invalid archived session id')
+  }
+  return sessionId
+}
+
+const archiveIds = workspaceRegistry => {
+  const ids = workspaceRegistry?.archivedSessionIds
+  if (!Array.isArray(ids) || ids.some(id => typeof id !== 'string')) {
+    throw new Error('unsupported workspace registry archive snapshot')
+  }
+  return [...ids]
+}
+
+const plainSnippet = (text, query) => {
+  const compact = text.replace(/\s+/g, ' ').trim()
+  if (compact.length <= 240) return compact
+  const matchAt = compact.toLowerCase().indexOf(query.toLowerCase())
+  const start = Math.max(0, (matchAt === -1 ? 0 : matchAt) - 80)
+  const end = Math.min(compact.length, start + 240)
+  return `${start > 0 ? '…' : ''}${compact.slice(start, end)}${end < compact.length ? '…' : ''}`
+}
+
+const scanArchivedEvents = async (sessionQuery, archivedSessionIds, query, signal) => {
+  if (typeof sessionQuery?.filterEvents !== 'function') {
+    throw new Error('archived history scan is unavailable')
+  }
+  const filters = [
+    { kind: 'type', values: ['user/message', 'assistant/message'] },
+    { kind: 'surface', values: ['current'] },
+    { kind: 'text', text: query },
+  ]
+  const items = []
+  for (let offset = 0; offset < archivedSessionIds.length && items.length <= SEARCH_LIMIT; offset += 4) {
+    signal?.throwIfAborted()
+    const batch = archivedSessionIds.slice(offset, offset + 4)
+    const matches = await Promise.all(batch.map(sessionId => sessionQuery.filterEvents(sessionId, filters)))
+    signal?.throwIfAborted()
+    for (let index = 0; index < batch.length; index += 1) {
+      const match = Array.isArray(matches[index])
+        ? matches[index].find(event => typeof event?.text === 'string' && event.text.trim().length > 0)
+        : undefined
+      if (match !== undefined) items.push({ sessionId: batch[index], snippet: plainSnippet(match.text, query) })
+      if (items.length > SEARCH_LIMIT) break
+    }
+  }
+  return { items: items.slice(0, SEARCH_LIMIT), hasMore: items.length > SEARCH_LIMIT }
+}
+
+/**
+ * Remove one id from DSH's registry-global archive set without touching the
+ * session log or its workspace accounting position. Prefer the public DSH
+ * unarchive operation; no registry implementation state is written.
+ */
+export async function restoreArchivedSession(workspaceRegistry, sessionId) {
+  const id = assertSessionId(sessionId)
+  if (typeof workspaceRegistry?.unarchiveSession !== 'function') {
+    throw new Error('public workspace unarchive API is unavailable')
+  }
+  const wasArchived = archiveIds(workspaceRegistry).includes(id)
+  await workspaceRegistry.unarchiveSession(id)
+  return { restored: wasArchived, archivedSessionIds: archiveIds(workspaceRegistry) }
+}
+
+/** Keep DSH's archive registry free of ids whose storage was permanently removed. */
+export async function reconcileDeletedArchive({ workspaceRegistry, warn = console.warn }, sessionId, result) {
+  if (result?.ok !== true) return result
+  try {
+    await restoreArchivedSession(workspaceRegistry, sessionId)
+    return { ok: true, value: { ...result.value, archiveReconciled: true } }
+  } catch (error) {
+    if (result.value?.alreadyAbsent === true) {
+      warn('absent session archive marker could not be reconciled:', error)
+      return { ok: false, error: { code: 'archive-reconcile-failed', message: '会话记录已不存在，但归档列表清理失败，请重试。' } }
+    }
+    warn('session storage was deleted but its archive marker could not be reconciled:', error)
+    return { ok: true, value: { ...result.value, archiveReconciled: false } }
+  }
+}
+
+/** Search current user/assistant message history inside the archive set only. */
+export async function searchArchivedSessions({ workspaceRegistry, sessionQuery }, query, signal) {
+  signal?.throwIfAborted()
+  const normalized = typeof query === 'string' ? query.trim() : ''
+  if (normalized.length === 0 || normalized.length > 500 || normalized.includes('\0')) {
+    throw new TypeError('invalid archive search query')
+  }
+  if (typeof sessionQuery?.searchSessions !== 'function') {
+    throw new Error('archived history search is unavailable')
+  }
+
+  const archivedSessionIds = archiveIds(workspaceRegistry)
+  if (archivedSessionIds.length === 0) return { items: [], hasMore: false }
+
+  let page
+  try {
+    page = await sessionQuery.searchSessions({
+      query: normalized,
+      sessionFilters: [{ kind: 'id', values: archivedSessionIds }],
+      eventFilters: [
+        { kind: 'type', values: ['user/message', 'assistant/message'] },
+        { kind: 'surface', values: ['current'] },
+      ],
+      limit: SEARCH_LIMIT,
+    }, { signal })
+    signal?.throwIfAborted()
+  } catch (error) {
+    if (error?.code !== 'SESSION_QUERY_SEARCH_DISABLED') throw error
+    return scanArchivedEvents(sessionQuery, archivedSessionIds, normalized, signal)
+  }
+
+  const archived = new Set(archivedSessionIds)
+  const items = []
+  const included = new Set()
+  for (const hit of Array.isArray(page?.items) ? page.items : []) {
+    const sessionId = hit?.header?.id
+    const match = hit?.bestMatch
+    if (
+      typeof sessionId !== 'string'
+      || !archived.has(sessionId)
+      || included.has(sessionId)
+      || match?.sessionId !== sessionId
+      || match?.surface !== 'current'
+      || !MESSAGE_TYPES.has(match?.type)
+      || typeof match?.snippet !== 'string'
+    ) continue
+    included.add(sessionId)
+    items.push({ sessionId, snippet: plainSnippet(match.snippet, normalized) })
+    if (items.length >= SEARCH_LIMIT) break
+  }
+
+  return { items, hasMore: page?.nextCursor !== undefined }
+}
+
+/** Same-origin HTTP boundary consumed by the native archive manager UI. */
+export function createArchiveRequestHandlers({ search, warn = console.warn, isTrustedRequest = () => false }) {
+  return {
+    search: async (req, res) => {
+      const body = await readPluginPost(req, res, isTrustedRequest)
+      if (body === undefined) return
+      const query = typeof body?.query === 'string' ? body.query.trim() : ''
+      if (query.length === 0 || query.length > 500 || query.includes('\0')) {
+        sendJson(res, 400, failure('invalid-query', '搜索内容无效。'))
+        return
+      }
+      const controller = new AbortController()
+      const abort = () => controller.abort(new Error('archive search request closed'))
+      req.once('aborted', abort)
+      if (typeof res.once === 'function') res.once('close', abort)
+      try {
+        const value = await search(query, controller.signal)
+        if (controller.signal.aborted) return
+        sendJson(res, 200, { ok: true, value })
+      } catch (error) {
+        if (controller.signal.aborted) return
+        warn('archived history search failed:', error)
+        sendJson(res, 503, failure('search-unavailable', '归档内容搜索暂不可用。'))
+      } finally {
+        req.off('aborted', abort)
+        if (typeof res.off === 'function') res.off('close', abort)
+      }
+    },
+  }
+}

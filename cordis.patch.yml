@@ -1,0 +1,3 @@
+- insert:
+    - id: session-library
+      name: dsh-session-library

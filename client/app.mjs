@@ -1,0 +1,344 @@
+import { normalizeConfig, libraryRows, paginateRows, groupedLibraryRows } from './library-model.mjs';
+import { installSidebar } from './sidebar.mjs';
+import { createFolderStore } from './folders.mjs';
+
+export function installLibrary(ctx, React) {
+  const h = React.createElement;
+  const STORAGE_KEY = 'dsh-session-library.config.v1';
+  let config;
+  try { config = normalizeConfig(JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}')); } catch { config = normalizeConfig({}); }
+  const configListeners = new Set(), openListeners = new Set();
+  let opened = false, initialTarget = null;
+  const subscribeConfig = fn => { configListeners.add(fn); return () => configListeners.delete(fn); };
+  const useConfig = () => React.useSyncExternalStore(subscribeConfig, () => config, () => config);
+  const setConfig = patch => {
+    config = normalizeConfig({ ...config, ...patch });
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(config)); } catch { /* Still usable for this tab. */ }
+    for (const fn of configListeners) fn();
+  };
+  const onStorage = event => {
+    if (event.key !== STORAGE_KEY) return;
+    try { config = normalizeConfig(JSON.parse(event.newValue || '{}')); for (const fn of configListeners) fn(); } catch { /* Ignore malformed settings. */ }
+  };
+  const publishOpen = value => { opened = value; for (const fn of openListeners) fn(); };
+  const openLibrary = target => { initialTarget = target && ['kind', 'row', 'folderId', 'workspaceId', 'ungrouped'].some(key => Object.hasOwn(target, key)) ? target : null; publishOpen(true); };
+  const closeLibrary = () => publishOpen(false);
+  // Sidebar view toggle writes grouping here; switching to a grouped mode also
+  // remembers it so the projects side of the toggle can restore the last choice.
+  const onSidebarConfig = patch => setConfig(patch.sidebarGrouping && patch.sidebarGrouping !== 'recent' ? { ...patch, sidebarGroupingRestore: patch.sidebarGrouping } : patch);
+  const text = (zh, en) => ctx.locale.getSnapshot().active === 'zh' ? zh : en;
+  const date = time => time ? new Date(time).toLocaleString() : '—';
+  const button = (label, onClick, props = {}) => h('button', { type: 'button', onClick, ...props }, label);
+  let disposed = false;
+  const controllers = new Set();
+  async function request(path, body = {}, signal) {
+    const response = await fetch('/plugins/dsh-session-library/' + path, {
+      method: 'POST', headers: { 'content-type': 'application/json', 'x-dsh-session-library-confirmation': path === 'trash' ? 'trash-session' : 'restore-trash' },
+      body: JSON.stringify(body), signal,
+    });
+    const result = await response.json();
+    if (!response.ok || result?.ok !== true) throw Error(result?.error?.message || `HTTP ${response.status}`);
+    return result.value;
+  }
+  const folderStore = createFolderStore(React, request);
+  const useFolders = folderStore.useFolders;
+  function Configuration() {
+    const value = useConfig();
+    return h('div', { className: 'dsl-config' },
+      h('label', null, text('侧边栏分组', 'Sidebar grouping'), h('select', { value: value.sidebarGrouping, onChange: e => setConfig({ sidebarGrouping: e.target.value }) }, h('option', { value: 'folders' }, text('文件夹与项目', 'Folders and projects')), h('option', { value: 'projects' }, text('按项目', 'By project')), h('option', { value: 'recent' }, text('最近会话', 'Recent sessions')))),
+      h('label', null, text('每组显示', 'Sessions per group'), h('select', { value: value.groupLimit, onChange: e => setConfig({ groupLimit: +e.target.value }) }, ...[3,5,10].map(n => h('option', { key: n, value: n }, n)))),
+      h('label', null, text('侧边栏最近会话数', 'Recent sessions in sidebar'),
+        h('select', { value: value.sidebarLimit, onChange: e => setConfig({ sidebarLimit: +e.target.value }) },
+          ...[5, 10, 20, 30, 50, 100].map(n => h('option', { key: n, value: n }, n)))),
+      h('label', null, text('管理页每页条数', 'Sessions per page'),
+        h('select', { value: value.pageSize, onChange: e => setConfig({ pageSize: +e.target.value }) },
+          ...[25, 50, 100].map(n => h('option', { key: n, value: n }, n)))),
+      h('p', { className: 'dsl-hint' }, text('当前、置顶和有待处理活动的会话会额外保留。设置保存在此浏览器。', 'Current, pinned and attention-bearing sessions remain visible. Settings are saved in this browser.')));
+  }
+  function Settings() {
+    return h('section', { className: 'dsl-settings' }, h('h2', null, text('会话库', 'Session library')), h(Configuration),
+      button(text('打开全部会话', 'Open all sessions'), openLibrary));
+  }
+  function Library({ useSessions, useWorkspaces }) {
+    const sessions = useSessions(s => s), workspaces = useWorkspaces(s => s), cfg = useConfig(), folderState = useFolders();
+    const [tab, setTab] = React.useState('all'), [query, setQuery] = React.useState(initialTarget?.kind === 'manage' ? initialTarget.row.id : initialTarget?.kind === 'query' ? initialTarget.query || '' : '');
+    const deferredQuery = React.useDeferredValue(query);
+    const [workspace, setWorkspace] = React.useState(initialTarget?.workspaceId || initialTarget?.value?.workspaceId || (initialTarget?.ungrouped || initialTarget?.value?.ungrouped ? '__ungrouped__' : '')), [sort, setSort] = React.useState('recent');
+    const [folderId, setFolderId] = React.useState(initialTarget?.folderId || initialTarget?.value?.folderId || (initialTarget?.ungrouped || initialTarget?.value?.ungrouped ? '__none__' : ''));
+    const [folderEditor, setFolderEditor] = React.useState(initialTarget?.kind === 'create-folder' ? { kind: 'create', name: '' } : initialTarget?.kind === 'move' ? { kind: 'move', row: initialTarget.row, folderId: folderState.assignments[initialTarget.row.id] || '' } : null);
+    const selectedFolder = folderState.folders.find(f => f.id === folderId);
+    const [page, setPage] = React.useState(0), [content, setContent] = React.useState(false);
+    const [searchResult, setSearchResult] = React.useState({ query: '', items: [], hasMore: false, scanned: 0, total: 0, complete: true });
+    const [searching, setSearching] = React.useState(false), [error, setError] = React.useState('');
+    const [busy, setBusy] = React.useState(false), [confirmation, setConfirmation] = React.useState(initialTarget?.kind === 'trash' ? initialTarget : null);
+    const [trash, setTrash] = React.useState([]), [preview, setPreview] = React.useState(null);
+    const [renameEditor, setRenameEditor] = React.useState(null);
+    const [showConfig, setShowConfig] = React.useState(false);
+    const dialog = React.useRef(null), alive = React.useRef(true), operation = React.useRef(false), searchRef = React.useRef(null), previewRef = React.useRef(null);
+    const modeRef = React.useRef(null); modeRef.current = { tab, query, content };
+    React.useEffect(() => {
+      alive.current = true;
+      const el = dialog.current;
+      el.showModal();
+      void folderStore.refresh();
+      return () => { alive.current = false; searchRef.current?.abort(); previewRef.current?.abort(); if (el.open) el.close(); };
+    }, []);
+    React.useEffect(() => {
+      searchRef.current?.abort(); setSearching(false); setPage(0);
+    }, [tab, query, content, workspace, folderId, sort, cfg.pageSize]);
+    async function run(task) {
+      if (operation.current) return;
+      operation.current = true; setBusy(true); setError('');
+      try { await task(); }
+      catch (reason) { if (alive.current) setError(reason.message || String(reason)); }
+      finally { operation.current = false; if (alive.current) setBusy(false); }
+    }
+    async function loadTrash() {
+      await run(async () => {
+        const data = await request('trash-list');
+        if (alive.current) {
+          setTrash(data.items || []);
+          if (data.invalidEntries) setError(text(`有 ${data.invalidEntries} 个回收站条目需要人工检查，未修改这些记录。`, `${data.invalidEntries} trash entries require manual inspection; their records were preserved.`));
+        }
+      });
+    }
+    React.useEffect(() => { if (tab === 'trash') void loadTrash(); }, [tab]);
+    async function search(event) {
+      event?.preventDefault();
+      if (!content || !query.trim() || tab === 'trash') return;
+      const at = { ...modeRef.current };
+      searchRef.current?.abort(); const abort = new AbortController(); searchRef.current = abort;
+      setSearching(true); setError('');
+      setSearchResult({ query: at.query.trim(), tab: at.tab, filterKey: JSON.stringify([workspace, folderId]), items: [], hasMore: false, scanned: 0, total: 0, complete: false });
+      try {
+        let cwds;
+        if (workspace) {
+          const owners = new Set((workspaces.items || []).flatMap(w => w.sessionIds || []));
+          const ids = workspace === '__ungrouped__' ? sessions.ids.filter(id => !owners.has(id)) : (workspaces.items.find(w => w.workspaceId === workspace)?.sessionIds || []);
+          cwds = [...new Set(ids.map(id => sessions.byId[id]?.cwd).filter(v => typeof v === 'string'))];
+        }
+        let cursor;
+        do {
+          const result = await request('search', { query: at.query.trim(), scope: at.tab, ...(folderId ? { folderId } : {}), ...(cwds ? { cwds } : {}), ...(cursor ? { cursor } : {}) }, abort.signal);
+          if (abort.signal.aborted || !alive.current) return;
+          setSearchResult({ ...result, query: at.query.trim(), tab: at.tab, filterKey: JSON.stringify([workspace, folderId]) }); setPage(0);
+          cursor = result.complete ? undefined : result.nextCursor;
+        } while (cursor && !abort.signal.aborted);
+      } catch (reason) { if (!abort.signal.aborted && alive.current) setError(reason.message || String(reason)); }
+      finally { if (!abort.signal.aborted && alive.current) setSearching(false); }
+    }
+    const validContentResult = searchResult.query === deferredQuery.trim() && searchResult.tab === tab && searchResult.filterKey === JSON.stringify([workspace, folderId]);
+    const filtered = React.useMemo(() => libraryRows(sessions, workspaces,
+      { tab, query: deferredQuery, workspace, folderId, sort, content }, content && validContentResult ? searchResult.items : [], folderState),
+      [sessions, workspaces, folderState, tab, deferredQuery, workspace, folderId, sort, content, validContentResult, searchResult]);
+    const trashRows = React.useMemo(() => trash.filter(row => !deferredQuery.trim() || [row.title || '', row.sessionId || '', row.trashId || ''].join(' ').toLowerCase().includes(deferredQuery.trim().toLowerCase())), [trash, deferredQuery]);
+    const paged = paginateRows(tab === 'trash' ? trashRows : filtered, page, cfg.pageSize);
+    async function view(row) {
+      previewRef.current?.abort(); const abort = new AbortController(); previewRef.current = abort;
+      setPreview({ row, loading: true }); setError('');
+      try {
+        const value = await request('preview', { sessionId: row.id }, abort.signal);
+        if (!abort.signal.aborted && alive.current) setPreview({ row, ...value });
+      } catch (reason) { if (!abort.signal.aborted && alive.current) { setPreview(null); setError(reason.message || String(reason)); } }
+    }
+    async function renameSession(sessionId, title) {
+      const trimmed = String(title || '').trim();
+      if (!trimmed) throw new Error(text('会话名称不能为空', 'Session title cannot be empty'));
+      const result = await ctx.sessions.using(sessionId, { source: 'workspaceOperation' }, reference => reference.binding.session.rename(trimmed));
+      if (!result?.ok) throw new Error(result?.error?.message || text('重命名失败', 'Rename failed'));
+      await ctx.sessions.refresh();
+    }
+    async function archiveRow(row) {
+      try {
+        await ctx.uiWorkspace.archiveSession(row.id);
+        await ctx.sessions.refresh();
+      } catch (reason) {
+        const activity = reason?.name === 'WorkspaceArchiveError' && reason?.rpcError?.code === 'workspace/session-active' ? reason.rpcError.details?.activity : undefined;
+        if (!activity?.length) throw reason;
+        setConfirmation({ kind: 'archive-stop', row, activity });
+      }
+    }
+    function activityLine(item) {
+      const kind = item?.kind || text('其他工作', 'work');
+      const names = Array.isArray(item?.names) ? item.names.filter(Boolean) : [];
+      const count = Number(item?.count ?? names.length ?? 0);
+      const labels = { turn: text('进行中的回合', 'turn in progress'), subagents: text('运行中的子智能体', 'running subagents'), jobs: text('后台任务', 'background jobs'), schedules: text('定时提醒', 'scheduled reminders') };
+      const base = labels[kind] || (kind === 'other' ? text(`其他工作（${item?.label || kind}）`, `other work (${item?.label || kind})`) : kind);
+      return names.length ? `${base}：${names.join('、')}` : count > 1 ? `${count} 项${base}` : base;
+    }
+    function openRow(row) {
+      if (row.archived) { void view(row); return; }
+      ctx.uiWorkspace.openSession(row.id); closeLibrary();
+    }
+    async function confirmAction() {
+      const target = confirmation;
+      if (!target) return;
+      await run(async () => {
+        if (target.kind === 'trash') {
+          const value = await request('trash', { sessionId: target.row.id, expectedArchived: target.row.archived });
+          await ctx.sessions.refresh();
+          if (alive.current && (value.archiveReconciled === false || value.pinReconciled === false)) setError(text('已移到回收站，但归档或置顶标记未完成更新。请刷新后检查。', 'Moved to trash, but archive or pin state could not be reconciled. Refresh and check.'));
+        } else if (target.kind === 'archive-stop') {
+          await ctx.uiWorkspace.archiveSession(target.row.id, { stopActivity: true });
+          await ctx.sessions.refresh();
+        } else {
+          const restored = await request('restore-trash', { trashId: target.row.trashId });
+          await ctx.sessions.refresh();
+          if (alive.current && (restored.archiveReconciled === false || restored.pinReconciled === false)) setError(text('会话记录已恢复，但归档或置顶标记未全部更新，请检查会话状态。', 'Records were restored, but archive or pin state could not be fully updated. Check the session.'));
+          const value = await request('trash-list');
+          if (alive.current) setTrash(value.items || []);
+        }
+        if (alive.current) setConfirmation(null);
+      });
+    }
+    async function saveFolder(event) {
+      event?.preventDefault();
+      const editor = folderEditor;
+      if (!editor) return;
+      await run(async () => {
+        if (editor.kind === 'create') {
+          const previous = new Set(folderState.folders.map(f => f.id));
+          const value = await folderStore.mutate('create', { name: editor.name });
+          const created = value.folders.find(f => !previous.has(f.id));
+          if (editor.moveRow && created) await folderStore.mutate('move', { sessionIds: [editor.moveRow.id], folderId: created.id });
+          if (created && !editor.moveRow && alive.current) setFolderId(created.id);
+        } else if (editor.kind === 'rename') await folderStore.mutate('rename', { folderId: editor.folder.id, name: editor.name });
+        else if (editor.kind === 'remove') { await folderStore.mutate('remove', { folderId: editor.folder.id }); if (alive.current) setFolderId(''); }
+        else if (editor.kind === 'move') await folderStore.mutate('move', { sessionIds: [editor.row.id], folderId: editor.folderId || null });
+        if (alive.current) setFolderEditor(null);
+      });
+    }
+    function rowActions(row) {
+      return h('div', { className: 'dsl-row-actions' },
+        !row.archived && button(text('打开', 'Open'), () => openRow(row), { disabled: busy }),
+        button(text('重命名', 'Rename'), () => setRenameEditor({ row, name: row.title || '' }), { disabled: busy }),
+        button(text('移动到…', 'Move to…'), () => setFolderEditor({ kind: 'move', row, folderId: folderState.assignments[row.id] || '' }), { disabled: busy || folderState.loading }),
+        button(text('查看', 'Preview'), () => void view(row), { disabled: busy }),
+        button(row.pinned ? text('取消置顶', 'Unpin') : text('置顶', 'Pin'), () => void run(() => row.pinned ? ctx.uiWorkspace.unpinSession(row.id) : ctx.uiWorkspace.pinSession(row.id)), { disabled: busy }),
+        !row.archived && button(text('归档', 'Archive'), () => void run(() => archiveRow(row)), { disabled: busy, title: row.running ? text('会话运行中：确认后会先停止其活动再归档', 'Running: confirmation stops its activity before archiving') : undefined }),
+        row.archived && button(text('取消归档', 'Unarchive'), () => void run(() => ctx.uiWorkspace.unarchiveSession(row.id).then(() => ctx.sessions.refresh())), { disabled: busy }),
+        button(text('移到回收站', 'Move to trash'), () => setConfirmation({ kind: 'trash', row }), { disabled: busy, className: 'dsl-danger' }));
+    }
+    const heading = preview ? preview.row.title : text('全部会话', 'All sessions');
+    const shortPath = path => {
+      if (typeof path !== 'string' || !path) return '';
+      const prefix = path.length > 56 ? path.slice(0, 24) + '…' + path.slice(-31) : path;
+      return prefix;
+    };
+    const rowArticle = row => h('article', { key: row.id, className: 'dsl-session-row', 'data-session-library-row': '', 'data-session-id': row.id },
+      h('div', { className: 'dsl-row-main' }, button(row.title, () => openRow(row), { className: 'dsl-session-title', title: row.title }),
+        h('small', { title: row.cwd ? text('工作目录', 'Working directory') + '：' + row.cwd : undefined },
+          row.workspace, ' · ', date(row.updatedAt),
+          row.cwd ? ' · ' + shortPath(row.cwd) : '',
+          row.archived ? text(' · 已归档', ' · Archived') : '', row.running ? text(' · 运行中', ' · Running') : '', row.pinned ? text(' · 已置顶', ' · Pinned') : ''),
+        row.snippet && h('p', { className: 'dsl-snippet' }, row.snippet)), rowActions(row));
+    const folderGroups = React.useMemo(() => cfg.libraryView === 'folders' && tab !== 'trash' ? groupedLibraryRows(filtered, folderState.folders) : [], [cfg.libraryView, tab, filtered, folderState.folders]);
+    const folderView = () => h('div', { className: 'dsl-folder-view' },
+      ...folderGroups.map(group => h('section', { key: group.key, 'data-dsl-library-group': group.key, style: { marginBottom: 14 } },
+        h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, padding: '6px 0' } },
+          h('strong', { style: { fontSize: 13, color: 'var(--dsw-alias-label-secondary,#666)' } }, group.name),
+          h('span', { style: { fontSize: 12, color: 'var(--dsw-alias-label-tertiary,#999)' } }, text(`${group.rows.length} 个`, `${group.rows.length}`)),
+          h('span', { style: { flex: 1 } }),
+          button(text('在列表中查看', 'View as list'), () => { if (group.folderId) { setFolderId(group.folderId); setWorkspace(''); } else if (group.workspaceId && group.workspaceId !== '__ungrouped__') { setWorkspace(group.workspaceId); setFolderId(''); } else { setWorkspace(group.workspaceId === '__ungrouped__' ? '__ungrouped__' : ''); setFolderId(''); } setConfig({ libraryView: 'list' }); }, { style: { fontSize: 12, padding: '3px 7px' } })),
+        ...group.rows.slice(0, cfg.pageSize).map(rowArticle),
+        group.rows.length > cfg.pageSize && h('p', { className: 'dsl-hint' }, text(`其余 ${group.rows.length - cfg.pageSize} 条未显示，用“在列表中查看”配合分页浏览。`, `${group.rows.length - cfg.pageSize} more hidden; use "View as list" with pagination.`)))));
+    return h('dialog', { ref: dialog, className: 'dsl-dialog', 'aria-label': text('会话库', 'Session library'), onCancel: event => { event.preventDefault(); if (folderEditor) setFolderEditor(null); else if (confirmation) setConfirmation(null); else if (renameEditor) setRenameEditor(null); else if (preview) { previewRef.current?.abort(); setPreview(null); } else closeLibrary(); } },
+      h('header', { className: 'dsl-header' },
+        h('div', { className: 'dsl-heading' }, preview && button(text('返回', 'Back'), () => { previewRef.current?.abort(); setPreview(null); }), h('h2', null, heading)),
+        h('div', { className: 'dsl-header-actions' }, !preview && button(text('显示设置', 'Display settings'), () => setShowConfig(!showConfig)), button(text('关闭', 'Close'), closeLibrary, { 'aria-label': text('关闭会话库', 'Close session library') }))),
+      showConfig && !preview && h(Configuration),
+      !preview && h('nav', { className: 'dsl-tabs', 'aria-label': text('会话范围', 'Session scope') },
+        ...[['all', text('全部', 'All')], ['active', text('未归档', 'Unarchived')], ['archived', text('已归档', 'Archived')], ['trash', text('回收站', 'Trash')]].map(([key, label]) => button(label, () => { setTab(key); setConfirmation(null); }, { key, 'aria-pressed': tab === key }))),
+      !preview && h('form', { className: 'dsl-tools', onSubmit: search },
+        h('input', { type: 'search', 'aria-label': text('搜索全部会话', 'Search all sessions'), placeholder: content && tab !== 'trash' ? text('输入正文关键词，按 Enter 搜索', 'Message phrase; press Enter to search') : text('搜索标题、工作区或会话 ID', 'Search title, workspace or session ID'), value: query, maxLength: 500, onChange: e => setQuery(e.target.value) }),
+        tab !== 'trash' && h('label', { className: 'dsl-check' }, h('input', { type: 'checkbox', checked: content, onChange: e => setContent(e.target.checked) }), text('搜索正文', 'Search messages')),
+        tab !== 'trash' && content && h('button', { type: 'submit', disabled: searching || !query.trim() }, searching ? text('搜索中…', 'Searching…') : text('搜索', 'Search')),
+        searching && button(text('取消搜索', 'Cancel search'), () => { searchRef.current?.abort(); setSearching(false); }),
+        tab !== 'trash' && h('select', { value: workspace, 'aria-label': text('按工作区筛选', 'Filter workspace'), onChange: e => setWorkspace(e.target.value) }, h('option', { value: '' }, text('所有工作区', 'All workspaces')), h('option', { value: '__ungrouped__' }, text('未分组', 'Ungrouped')), ...(workspaces.items || []).map(w => h('option', { key: w.workspaceId, value: w.workspaceId }, w.title || w.path))),
+        tab !== 'trash' && h('select', { value: sort, 'aria-label': text('排序', 'Sort'), onChange: e => setSort(e.target.value) }, h('option', { value: 'recent' }, text('最近更新', 'Recently updated')), h('option', { value: 'oldest' }, text('最早更新', 'Oldest updated')), h('option', { value: 'title' }, text('标题', 'Title'))),
+        tab !== 'trash' && h('span', { role: 'group', 'aria-label': text('视图', 'View'), style: { display: 'inline-flex', gap: 0 } },
+          button(text('列表', 'List'), () => setConfig({ libraryView: 'list' }), { 'aria-pressed': cfg.libraryView !== 'folders', style: { borderTopRightRadius: 0, borderBottomRightRadius: 0 } }),
+          button(text('文件夹', 'Folders'), () => setConfig({ libraryView: 'folders' }), { 'aria-pressed': cfg.libraryView === 'folders', style: { borderTopLeftRadius: 0, borderBottomLeftRadius: 0, marginLeft: -1 } })),
+        button(text('刷新', 'Refresh'), () => tab === 'trash' ? void loadTrash() : void run(() => ctx.sessions.refresh()), { disabled: busy })),
+      folderState.error && h('div', { role: 'alert', className: 'dsl-error' }, folderState.error, ' ', button(text('重试文件夹', 'Retry folders'), () => void folderStore.refresh())),
+      error && h('div', { role: 'alert', className: 'dsl-error' }, error),
+      folderEditor && h('section', { className: 'dsl-confirm', role: 'region', 'aria-label': text('整理会话文件夹', 'Organize session folders') },
+        h('form', { className: 'dsl-folder-editor', onSubmit: saveFolder },
+          h('strong', null, folderEditor.kind === 'move' ? text('移动到文件夹', 'Move to folder') : folderEditor.kind === 'remove' ? text('删除文件夹？', 'Remove folder?') : folderEditor.kind === 'rename' ? text('重命名文件夹', 'Rename folder') : text('新建文件夹', 'New folder')),
+          folderEditor.kind === 'move' ? h(React.Fragment, null,
+            h('p', null, folderEditor.row.title),
+            h('select', { 'aria-label': text('目标文件夹', 'Destination folder'), value: folderEditor.folderId, onChange: e => setFolderEditor({ ...folderEditor, folderId: e.target.value }) }, h('option', { value: '' }, text('移出文件夹', 'No folder')), ...folderState.folders.map(f => h('option', { key: f.id, value: f.id }, f.name))),
+            button(text('新建文件夹', 'New folder'), () => setFolderEditor({ kind: 'create', name: '', moveRow: folderEditor.row }))) : folderEditor.kind === 'remove' ? h('p', null, text(`只删除“${folderEditor.folder.name}”这个分类，里面的会话全部保留。`, `Only removes the folder “${folderEditor.folder.name}”. All sessions are kept.`)) : h('input', { 'aria-label': text('文件夹名称', 'Folder name'), value: folderEditor.name, maxLength: 100, autoFocus: true, required: true, onChange: e => setFolderEditor({ ...folderEditor, name: e.target.value }) }),
+          h('p', { className: 'dsl-hint' }, text('文件夹用于整理会话；移动不会改变实际工作目录。', 'Folders organize conversations; moving does not change the working directory.')),
+          h('div', { className: 'dsl-row-actions' }, button(text('取消', 'Cancel'), () => setFolderEditor(null), { disabled: busy }), h('button', { type: 'submit', disabled: busy || (['create','rename'].includes(folderEditor.kind) && !folderEditor.name.trim()) }, busy ? text('保存中…', 'Saving…') : text('保存', 'Save'))))),
+      renameEditor && h('section', { className: 'dsl-confirm', role: 'region', 'aria-label': text('重命名会话', 'Rename session') },
+        h('form', { onSubmit: event => { event.preventDefault(); const target = renameEditor; setRenameEditor(null); void run(() => renameSession(target.row.id, target.name)); } },
+          h('strong', null, text('重命名会话', 'Rename session')),
+          h('p', null, renameEditor.row.title || renameEditor.row.id),
+          h('input', { 'aria-label': text('会话名称', 'Session title'), value: renameEditor.name, maxLength: 200, autoFocus: true, required: true, onChange: e => setRenameEditor({ ...renameEditor, name: e.target.value }) }),
+          h('p', { className: 'dsl-hint' }, text('重命名后的标题不会再被自动标题覆盖。', 'A renamed title is pinned and will not be overwritten by auto-titling.')),
+          h('div', { className: 'dsl-row-actions' }, button(text('取消', 'Cancel'), () => setRenameEditor(null), { disabled: busy, type: 'button' }), h('button', { type: 'submit', disabled: busy || !renameEditor.name.trim() }, busy ? text('保存中…', 'Saving…') : text('保存', 'Save'))))),
+      confirmation && h('section', { className: 'dsl-confirm', role: 'alertdialog', 'aria-label': text('确认操作', 'Confirm action') },
+        h('strong', null, confirmation.kind === 'trash' ? text('移到回收站？', 'Move to trash?') : confirmation.kind === 'archive-stop' ? text('停止并归档此会话？', 'Stop and archive this session?') : text('恢复会话？', 'Restore session?')),
+        h('p', null, confirmation.row.title || confirmation.row.sessionId),
+        confirmation.kind === 'archive-stop' ? h(React.Fragment, null,
+          h('p', { className: 'dsl-hint' }, text('“{title}”仍有正在进行的工作。归档会先停止这些工作；之后可在会话库恢复会话，被停止的工作不会自动继续。'.replace('{title}', confirmation.row.title || confirmation.row.id), `"${confirmation.row.title || confirmation.row.id}" still has ongoing work. Archiving stops it first; the session can be restored later from the library, but stopped work does not resume automatically.`)),
+          h('p', { className: 'dsl-hint' }, text('将被停止的工作', 'Work that will be stopped')),
+          h('ul', { style: { margin: '4px 0', paddingLeft: 20, fontSize: 12 } }, ...confirmation.activity.map((item, index) => h('li', { key: index }, activityLine(item))))) : h('p', { className: 'dsl-hint' }, confirmation.kind === 'trash' ? text('会话记录将保留在服务器回收站。已加载、运行中或被占用的会话无法移入。', 'Records are retained in server trash. Loaded, running or locked sessions cannot be moved.') : text('将恢复会话记录和原有归档、置顶状态；同名会话已存在时会拒绝覆盖。', 'Restores records and prior archive/pin state. Existing sessions are never overwritten.')),
+        h('div', { className: 'dsl-row-actions' }, button(text('取消', 'Cancel'), () => setConfirmation(null), { disabled: busy, autoFocus: true }), button(busy ? text('处理中…', 'Working…') : confirmation.kind === 'archive-stop' ? text('停止并归档', 'Stop and archive') : text('确认', 'Confirm'), () => void confirmAction(), { disabled: busy }))),
+      preview ? h('div', { className: 'dsl-preview', 'aria-busy': !!preview.loading },
+        preview.loading ? h('p', { role: 'status' }, text('正在读取…', 'Loading…')) : h(React.Fragment, null,
+          h('p', { className: 'dsl-hint' }, text('只读预览，不改变归档状态。', 'Read-only preview; archive state stays unchanged.')),
+          preview.messages?.length ? preview.messages.map((m, i) => h('article', { key: i, className: 'dsl-message' }, h('strong', null, m.role === 'user' ? text('你', 'You') : text('助手', 'Assistant')), h('pre', null, m.text))) : h('p', null, text('没有可显示的文字消息', 'No text messages to display')),
+          (preview.hasMore || preview.truncated) && h('p', { className: 'dsl-hint' }, text('预览只显示部分消息。打开会话可继续查看完整记录。', 'This preview shows part of the history. Open the session for the complete record.')))) : h(React.Fragment, null,
+        content && tab !== 'trash' && query.trim() && !validContentResult && h('p', { className: 'dsl-hint' }, text('按 Enter 或点击“搜索”检索聊天正文。', 'Press Enter or Search to search messages.')),
+        content && validContentResult && searchResult.total > 0 && h('p', { role: 'status', className: 'dsl-hint' }, text(`已检查 ${searchResult.scanned} / ${searchResult.total} 个会话${!searching && !searchResult.complete ? '，搜索已暂停；重新搜索可从头检查' : ''}`, `Checked ${searchResult.scanned} / ${searchResult.total} sessions${!searching && !searchResult.complete ? '; search paused' : ''}`)),
+        content && validContentResult && searchResult.hasMore && h('p', { role: 'status', className: 'dsl-hint' }, text('已显示前 20 个正文匹配，请缩小关键词范围。', 'Showing the first 20 message matches. Narrow your search.')),
+        h('div', { className: 'dsl-results', 'data-session-library-results': '', 'aria-busy': busy || searching },
+          paged.items.length === 0 && h('p', { className: 'dsl-empty' }, sessions.phase !== 'ready' && tab !== 'trash' ? text('正在加载会话列表…', 'Loading sessions…') : text('没有匹配的会话', 'No matching sessions')),
+          tab !== 'trash' && cfg.libraryView === 'folders' ? folderView() : null,
+          !(tab !== 'trash' && cfg.libraryView === 'folders') && h(React.Fragment, null,
+            ...paged.items.map(row => tab === 'trash' ? h('article', { key: row.trashId, className: 'dsl-session-row', 'data-session-library-row': '' },
+              h('div', { className: 'dsl-row-main' }, h('strong', null, row.title || row.sessionId), h('small', null, date(row.trashedAt || row.createdAt))),
+              button(row.recoverable === false ? text('需要人工检查', 'Needs inspection') : text('恢复', 'Restore'), () => setConfirmation({ kind: 'restore', row }), { disabled: busy || row.recoverable === false })) : rowArticle(row)))),
+        !(tab !== 'trash' && cfg.libraryView === 'folders') && h('footer', { className: 'dsl-footer' }, h('span', { role: 'status', 'aria-live': 'polite' }, text(`共 ${paged.total} 个 · 第 ${paged.page + 1} / ${paged.pages} 页`, `${paged.total} sessions · Page ${paged.page + 1} / ${paged.pages}`)),
+          h('div', { className: 'dsl-row-actions' }, button(text('上一页', 'Previous'), () => setPage(paged.page - 1), { disabled: paged.page === 0 }), button(text('下一页', 'Next'), () => setPage(paged.page + 1), { disabled: paged.page + 1 === paged.pages })))));
+  }
+  function Overlay(props) {
+    const isOpen = React.useSyncExternalStore(fn => { openListeners.add(fn); return () => openListeners.delete(fn); }, () => opened, () => false);
+    return isOpen ? h(Library, props) : null;
+  }
+  const style = document.createElement('style'); style.id = 'dsh-session-library-style'; style.textContent = LIBRARY_CSS;
+  document.head.append(style);
+  window.addEventListener('storage', onStorage);
+  ctx.slots.inject('shell.overlay', () => ctx.slots.register({ name: 'shell.overlay', id: 'dsh-session-library.overlay' }, Overlay));
+  ctx.slots.inject('settings.section', () => ctx.slots.register({ name: 'settings.section', id: 'dsh-session-library.settings', order: 24, label: () => text('会话库', 'Session library') }, Settings));
+  installSidebar(ctx, React, { openLibrary, useConfig, onConfigChange: onSidebarConfig });
+  ctx.effect(() => ctx.contextMenus.register({
+    id: 'dsh-session-library.manage', target: 'session', order: 490,
+    observe: () => [ctx.workspaces.list, ctx.locale],
+    resolve({ sessionId, displayTitle }) {
+      const archived = ctx.workspaces.list.getSnapshot().archivedSessionIds.includes(sessionId);
+      const row = { id: sessionId, title: displayTitle || sessionId, archived };
+      return [
+        { id: 'library', label: text('在会话库中管理', 'Manage in session library'), run: () => openLibrary({ kind: 'manage', row }) },
+        { id: 'trash', label: text('移到回收站', 'Move to trash'), danger: true, afterContent: true, run: () => openLibrary({ kind: 'trash', row }) },
+      ];
+    },
+  }), 'session-library context menu');
+  ctx.effect(() => () => { disposed = true; style.remove(); window.removeEventListener('storage', onStorage); for (const controller of controllers) controller.abort(); controllers.clear(); configListeners.clear(); openListeners.clear(); }, 'session-library lifecycle');
+  return { openLibrary };
+}
+
+const LIBRARY_CSS = `
+.dsl-dialog{box-sizing:border-box;width:min(1120px,94vw);height:min(840px,92dvh);max-width:94vw;max-height:92dvh;padding:0;border:1px solid var(--dsw-alias-border-l2,#d8d8d8);border-radius:14px;background:var(--dsw-alias-bg-base,#fff);color:var(--dsw-alias-label-primary,#222);font:inherit;overflow:hidden;box-shadow:0 12px 60px #0003}
+.dsl-dialog[open]{display:flex;flex-direction:column}.dsl-dialog::backdrop{background:#0005}
+.dsl-dialog button,.dsl-settings button{font:inherit;font-size:13px;color:inherit;background:transparent;border:1px solid var(--dsw-alias-border-l2,#d8d8d8);border-radius:7px;padding:6px 10px;cursor:pointer;min-height:32px;white-space:nowrap}
+.dsl-dialog button:hover,.dsl-settings button:hover{background:var(--dsw-alias-interactive-bg-hover,#eee)}.dsl-dialog button:disabled{opacity:.45;cursor:default}.dsl-dialog button:focus-visible,.dsl-dialog input:focus-visible,.dsl-dialog select:focus-visible{outline:2px solid var(--dsw-focus-ring-color,#4c78a8);outline-offset:2px}
+.dsl-header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:16px 20px;border-bottom:1px solid var(--dsw-alias-border-l2,#ddd);flex:none}.dsl-heading{display:flex;align-items:center;gap:12px;min-width:0}.dsl-heading h2{margin:0;font-size:19px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dsl-header-actions{display:flex;gap:8px;flex:none}
+.dsl-tabs{display:flex;gap:6px;padding:12px 20px 0;flex:none}.dsl-tabs button{border-color:transparent}.dsl-tabs button[aria-pressed=true]{background:var(--dsw-alias-interactive-bg-hover,#eee);font-weight:600;border-color:var(--dsw-alias-border-l2,#ddd)}
+.dsl-tools{display:flex;align-items:center;gap:8px;padding:12px 20px;flex-wrap:wrap;flex:none}.dsl-tools>input{flex:1 1 240px;min-width:120px}.dsl-dialog input[type=search],.dsl-dialog select,.dsl-config select{font:inherit;font-size:13px;min-height:34px;border:1px solid var(--dsw-alias-border-l2,#ccc);border-radius:7px;padding:5px 9px;background:var(--dsw-alias-bg-base,#fff);color:inherit}.dsl-check{display:flex;align-items:center;gap:4px;font-size:13px;white-space:nowrap}.dsl-check input{margin:0}
+.dsl-results{flex:1;min-height:0;overflow:auto;padding:0 20px;overscroll-behavior:contain}.dsl-session-row{display:flex;align-items:center;gap:16px;padding:13px 0;border-bottom:1px solid var(--dsw-alias-border-l2,#ddd);min-width:0}.dsl-row-main{flex:1;min-width:0}.dsl-dialog .dsl-session-title{display:block;max-width:100%;text-align:left;border:0;padding:0;font-weight:500;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-height:24px}.dsl-session-row small{display:block;font-size:12px;color:var(--dsw-alias-label-secondary,#666);margin-top:3px}.dsl-row-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap;flex:none}.dsl-row-actions button{font-size:12px;padding:4px 7px}.dsl-dialog .dsl-danger{color:var(--dsw-alias-state-error-primary,#b33535)}.dsl-snippet{white-space:pre-wrap;overflow-wrap:anywhere;max-height:88px;overflow:auto;font-size:13px;margin:8px 0 0}
+.dsl-footer{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 20px;border-top:1px solid var(--dsw-alias-border-l2,#ddd);font-size:13px;flex:none}.dsl-empty{padding:28px;text-align:center;color:var(--dsw-alias-label-secondary,#666)}.dsl-error{margin:0 20px 10px;padding:10px 12px;border:1px solid var(--dsw-alias-state-error-primary,#b33535);border-radius:8px;white-space:pre-wrap;font-size:13px}.dsl-hint{font-size:12px;color:var(--dsw-alias-label-secondary,#666);margin:8px 20px;line-height:1.5}.dsl-config{padding:12px 20px;display:flex;align-items:center;gap:16px;flex-wrap:wrap;flex:none}.dsl-config label{font-size:13px;display:flex;align-items:center;gap:8px}.dsl-config .dsl-hint{flex-basis:100%;margin:0}.dsl-settings .dsl-config{padding-left:0}.dsl-confirm{margin:0 20px 12px;padding:12px;border:1px solid var(--dsw-alias-border-l2,#ccc);border-radius:8px;flex:none}.dsl-confirm p{margin:7px 0;overflow-wrap:anywhere}.dsl-confirm .dsl-hint{margin:7px 0}.dsl-preview{flex:1;min-height:0;overflow:auto;padding:0 20px 20px}.dsl-preview>.dsl-hint{margin:12px 0}.dsl-message{padding:16px 0;border-bottom:1px solid var(--dsw-alias-border-l2,#ddd)}.dsl-message strong{font-size:13px}.dsl-message pre{font:inherit;font-size:14px;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.65;margin:8px 0 0}
+@media(max-width:760px){.dsl-session-row{align-items:flex-start;flex-direction:column;gap:8px}.dsl-header{padding:12px}.dsl-heading h2{font-size:17px}.dsl-tools,.dsl-tabs{padding-left:12px;padding-right:12px}.dsl-results{padding:0 12px}.dsl-header-actions button{padding:5px 7px}.dsl-dialog{width:96vw;max-width:96vw;height:94dvh;max-height:94dvh}.dsl-footer{padding:10px 12px}.dsl-row-actions{gap:5px}}
+`;
