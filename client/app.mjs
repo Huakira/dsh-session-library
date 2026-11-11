@@ -82,7 +82,7 @@ export function installLibrary(ctx, React) {
         h('select', { value: value.sidebarLimit, onChange: e => setConfig({ sidebarLimit: +e.target.value }) },
           ...[5, 10, 20, 30, 50, 100].map(n => h('option', { key: n, value: n }, n)))),
       h('label', null, text('会话区高度（占侧栏百分比）', 'Session area height (% of sidebar)'),
-        h('input', { type: 'range', min: 20, max: 90, step: 5, disabled: value.sidebarSessionHeight === 'auto', value: value.sidebarSessionHeight === 'auto' ? 65 : value.sidebarSessionHeight, onChange: e => setConfig({ sidebarSessionHeight: +e.target.value }), 'aria-label': text('会话区高度百分比', 'Session area height percentage'), style: { accentColor: 'var(--dsw-focus-ring-color,#4c78a8)' } }),
+        h('input', { type: 'range', min: 20, max: 90, step: 5, value: typeof value.sidebarSessionHeight === 'number' ? value.sidebarSessionHeight : 65, onChange: e => setConfig({ sidebarSessionHeight: +e.target.value }), 'aria-label': text('会话区高度百分比', 'Session area height percentage'), title: value.sidebarSessionHeight === 'auto' ? text('当前为自适应；拖动即改为固定百分比', 'Currently Auto; drag to set a fixed percentage') : '', style: { accentColor: 'var(--dsw-focus-ring-color,#4c78a8)' } }),
         h('span', { style: { minWidth: '3em', textAlign: 'center' } }, value.sidebarSessionHeight === 'auto' ? '—' : `${value.sidebarSessionHeight}%`),
         button(text('自适应', 'Auto'), () => setConfig({ sidebarSessionHeight: 'auto' }), { 'aria-pressed': value.sidebarSessionHeight === 'auto', style: { fontSize: 12, padding: '3px 8px' } })),
       h('label', null, text('管理页每页条数', 'Sessions per page'),

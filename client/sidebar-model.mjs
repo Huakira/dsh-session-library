@@ -42,6 +42,11 @@ export function groupSidebarRows(fullList, projected, workspace, folderState = {
   for (const project of projects) for (const id of project.sessionIds ?? []) {
     if (!projectBySession.has(id)) projectBySession.set(id, project);
   }
+  // Path fallback: a workspace created over an existing directory starts with
+  // empty sessionIds (the one-time history bootstrap only runs on first init),
+  // so sessions whose cwd already matches a workspace path group into that
+  // workspace instead of splitting into a second "未分组" bucket.
+  const projectByPath = new Map(projects.map(project => [project.path, project]).filter(([, project]) => project));
   const groups = new Map();
   const ensure = descriptor => {
     if (!groups.has(descriptor.key)) groups.set(descriptor.key, { ...descriptor, rows: [], total: 0 });
@@ -52,7 +57,7 @@ export function groupSidebarRows(fullList, projected, workspace, folderState = {
     if (mode === 'recent') return { key: 'recent', name: '最近会话' };
     const folder = mode === 'folders' ? folderMap.get(assignments[row.id]) : undefined;
     if (folder) return { key: `folder:${folder.id}`, name: folder.name, folderId: folder.id };
-    const project = projectBySession.get(row.id);
+    const project = projectBySession.get(row.id) ?? (row.cwd ? projectByPath.get(row.cwd) : undefined);
     if (project) return { key: `project:${project.workspaceId}`, name: project.title || project.path?.split('/').filter(Boolean).at(-1) || '项目', workspaceId: project.workspaceId };
     return { key: 'ungrouped', name: '未分组', ungrouped: true };
   };

@@ -17,6 +17,9 @@ export function libraryRows(sessions, workspaces, filters = {}, hits = [], folde
   const pinned = new Set(workspaces.pinnedSessionIds || []);
   const owners = new Map();
   for (const w of workspaces.items || []) for (const id of w.sessionIds || []) owners.set(id, w);
+  // Same path fallback as the sidebar: cwd-matching sessions belong to the
+  // workspace even before the registry accounts them in sessionIds.
+  const byPath = new Map((workspaces.items || []).map(w => [w.path, w]).filter(([, w]) => w));
   const snippets = new Map(hits.map(h => [h.sessionId, h.snippet || '']));
   const query = String(filters.query || '').trim().toLocaleLowerCase();
   const rows = [];
@@ -25,7 +28,7 @@ export function libraryRows(sessions, workspaces, filters = {}, hits = [], folde
     if (!s || s.parentId || s.origin === 'subagent') continue;
     const isArchived = archived.has(id);
     if (filters.tab === 'active' && isArchived || filters.tab === 'archived' && !isArchived) continue;
-    const workspace = owners.get(id);
+    const workspace = owners.get(id) ?? (s.cwd ? byPath.get(s.cwd) : undefined);
     const folderId = assignments[id] || '';
     const folderName = folderNames.get(folderId) || '';
     if (filters.folderId === '__none__' && folderId || filters.folderId && filters.folderId !== '__none__' && folderId !== filters.folderId) continue;

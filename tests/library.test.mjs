@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { normalizeConfig, libraryRows, paginateRows, groupedLibraryRows, abbreviatePath } from '../client/library-model.mjs';
+import { groupSidebarRows } from '../client/sidebar-model.mjs';
 const sessions = { ids: Array.from({length:3188},(_,i)=>String(i)), byId: {} };
 for (const id of sessions.ids) sessions.byId[id] = {id,displayTitle:`历史会话 ${id}`,updatedAt:+id,cwd:'/work'};
 const workspaces = {items:[{workspaceId:'project',id:'project',title:'研究',sessionIds:['1','2']}],archivedSessionIds:['0','1'],pinnedSessionIds:['2']};
@@ -62,4 +63,20 @@ test('abbreviatePath shortens home prefix and very long paths',()=>{
  const long='/very/'.repeat(20)+'end';
  assert.ok(abbreviatePath(long,'').length<60);
  assert.ok(abbreviatePath(long,'').includes('…'));
+});
+test('cwd path fallback groups unaccounted sessions into the matching workspace',()=>{
+ const sessions={ids:['a','b'],byId:{
+  a:{id:'a',displayTitle:'member',cwd:'/w',updatedAt:2},
+  b:{id:'b',displayTitle:'stray-in-dir',cwd:'/w',updatedAt:1},
+ }};
+ const workspaces={items:[{workspaceId:'w1',title:'研究',path:'/w',sessionIds:['a']}],archivedSessionIds:[],pinnedSessionIds:[]};
+ const rows=libraryRows(sessions,workspaces);
+ assert.deepEqual(rows.map(r=>r.workspaceId),['w1','w1']);
+ assert.equal(rows.every(r=>r.workspace==='研究'),true);
+ const groups=groupSidebarRows(sessions,sessions,{items:[],archivedSessionIds:[],pinnedSessionIds:[]},{},'folders');
+ // sidebar: same sessions under one workspace group via path fallback
+ const withProjects=groupSidebarRows(sessions,sessions,workspaces,{},'folders');
+ assert.equal(withProjects.filter(g=>g.name==='未分组').length,0);
+ assert.equal(withProjects.find(g=>g.key==='project:w1').total,2);
+ assert.equal(groups.find(g=>g.key==='ungrouped').total,2);
 });
