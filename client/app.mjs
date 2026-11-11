@@ -23,9 +23,17 @@ export function installLibrary(ctx, React) {
   const publishOpen = value => { opened = value; for (const fn of openListeners) fn(); };
   const openLibrary = target => { initialTarget = target && ['kind', 'row', 'folderId', 'workspaceId', 'ungrouped'].some(key => Object.hasOwn(target, key)) ? target : null; publishOpen(true); };
   const closeLibrary = () => publishOpen(false);
-  // Sidebar view toggle writes grouping here; switching to a grouped mode also
-  // remembers it so the projects side of the toggle can restore the last choice.
-  const onSidebarConfig = patch => setConfig(patch.sidebarGrouping && patch.sidebarGrouping !== 'recent' ? { ...patch, sidebarGroupingRestore: patch.sidebarGrouping } : patch);
+  // Workspace rename/delete requests raised from our context menu; the sidebar
+  // renders the inline editor that settles them. The official menu entries
+  // route their actions into the official sidebar's own request store, which
+  // this plugin's sidebar replaces — so ours must carry the actions.
+  const workspaceListeners = new Set();
+  let workspacePending = null;
+  const workspaceRequest = {
+    get: () => workspacePending,
+    set: value => { workspacePending = value; for (const fn of workspaceListeners) fn(); },
+    subscribe: fn => { workspaceListeners.add(fn); return () => workspaceListeners.delete(fn); },
+  };
   const text = (zh, en) => ctx.locale.getSnapshot().active === 'zh' ? zh : en;
   const date = time => time ? new Date(time).toLocaleString() : '—';
   const button = (label, onClick, props = {}) => h('button', { type: 'button', onClick, ...props }, label);
@@ -45,7 +53,6 @@ export function installLibrary(ctx, React) {
   function Configuration() {
     const value = useConfig();
     return h('div', { className: 'dsl-config' },
-      h('label', null, text('侧边栏分组', 'Sidebar grouping'), h('select', { value: value.sidebarGrouping, onChange: e => setConfig({ sidebarGrouping: e.target.value }) }, h('option', { value: 'folders' }, text('文件夹与项目', 'Folders and projects')), h('option', { value: 'projects' }, text('按项目', 'By project')), h('option', { value: 'recent' }, text('最近会话', 'Recent sessions')))),
       h('label', null, text('每组显示', 'Sessions per group'), h('select', { value: value.groupLimit, onChange: e => setConfig({ groupLimit: +e.target.value }) }, ...[3,5,10].map(n => h('option', { key: n, value: n }, n)))),
       h('label', null, text('侧边栏最近会话数', 'Recent sessions in sidebar'),
         h('select', { value: value.sidebarLimit, onChange: e => setConfig({ sidebarLimit: +e.target.value }) },
@@ -313,7 +320,20 @@ export function installLibrary(ctx, React) {
   window.addEventListener('storage', onStorage);
   ctx.slots.inject('shell.overlay', () => ctx.slots.register({ name: 'shell.overlay', id: 'dsh-session-library.overlay' }, Overlay));
   ctx.slots.inject('settings.section', () => ctx.slots.register({ name: 'settings.section', id: 'dsh-session-library.settings', order: 24, label: () => text('会话库', 'Session library') }, Settings));
-  installSidebar(ctx, React, { openLibrary, useConfig, onConfigChange: onSidebarConfig });
+  installSidebar(ctx, React, { openLibrary, useConfig, onConfigChange: setConfig, workspaceRequest });
+  // A dedicated menu kind: the official 'workspace' entries route their run
+  // handlers into the official sidebar's private request store, which this
+  // plugin's sidebar replaces — they would render but do nothing. Our own
+  // kind keeps the menu to entries that actually work here.
+  ctx.effect(() => ctx.contextMenus.register({
+    id: 'dsh-session-library.workspace', target: 'session-library-workspace', order: 496,
+    resolve({ workspaceId, displayTitle }) {
+      return [
+        { id: 'dsl-ws-rename', label: text('重命名工作区', 'Rename workspace'), icon: { key: 'workspace.rename' }, run: () => workspaceRequest.set({ action: 'rename', workspaceId, displayTitle, name: displayTitle || '' }) },
+        { id: 'dsl-ws-delete', label: text('删除工作区', 'Delete workspace'), icon: { key: 'workspace.delete' }, danger: true, afterContent: true, run: () => workspaceRequest.set({ action: 'delete', workspaceId, displayTitle }) },
+      ];
+    },
+  }), 'session-library workspace menu');
   ctx.effect(() => ctx.contextMenus.register({
     id: 'dsh-session-library.manage', target: 'session', order: 490,
     observe: () => [ctx.workspaces.list, ctx.locale],

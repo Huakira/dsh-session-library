@@ -23,7 +23,7 @@ test('three thousand catalog rows create only thirty recent row components and n
   assert.ok(flat.length < 400);
   rowButtons[0].props.onClick();
   assert.equal(selected, 's3187');
-  flat.find(n => n.type === 'button' && n.props.title === '完整浏览、搜索和归档管理').props.onClick();
+  flat.find(n => n.type === 'button' && n.props['aria-label'] === '全部会话').props.onClick();
   assert.equal(openedLibrary, 1);
   assert.equal(list.ids.length, 3188);
 });
