@@ -101,11 +101,13 @@ test('group fold emits zero rows; expanded group includes old active attention b
   const statuses = new Map([['s001', { running: true }]]);
   const workspace = { pinnedSessionIds: ['s002'] };
   const projection = projectSidebarList(list, workspace, statuses, 30);
-  const group = groupSidebarRows(list, projection.list, workspace)[0];
+  const group = groupSidebarRows(list, projection.list, workspace, {}, 'folders', statuses)[0];
   const pinned = new Set(workspace.pinnedSessionIds);
   assert.equal(visibleSidebarGroupRows(group, false, 5, pinned, statuses).length, 0);
   const visible = visibleSidebarGroupRows(group, true, 5, pinned, statuses);
-  assert.equal(visible.length, 7);
+  // Live rows (retained current, running, pinned) now sort to the top, so the
+  // first five already include them; no attention row can fall beyond the cut.
+  assert.equal(visible.length, 5);
   for (const id of ['s000', 's001', 's002']) assert.ok(visible.some(row => row.id === id));
   assert.equal(Object.keys(projection.list.byId).length, 33);
 });

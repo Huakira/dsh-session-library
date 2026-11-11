@@ -48,11 +48,11 @@ export function installSidebar(ctx, React, { openLibrary, useConfig, useFolders,
     const archived = React.useMemo(() => new Set(workspace.archivedSessionIds ?? []), [workspace.archivedSessionIds]);
     const grouping = ['recent', 'projects', 'folders'].includes(config?.sidebarGrouping) ? config.sidebarGrouping : 'folders';
     const groups = React.useMemo(() => {
-      const base = groupSidebarRows(list, projection.list, workspace, folders, grouping);
+      const base = groupSidebarRows(list, projection.list, workspace, folders, grouping, statuses);
       if (!needle) return base;
       const match = row => ((row.displayTitle ?? row.title ?? '') + ' ' + row.id).toLocaleLowerCase().includes(needle);
       return base.map(group => ({ ...group, rows: group.rows.filter(match), total: group.rows.filter(match).length })).filter(group => group.rows.length > 0);
-    }, [list, projection.list, workspace, folders, grouping, needle]);
+    }, [list, projection.list, workspace, folders, grouping, statuses, needle]);
     const [error, setError] = React.useState('');
     const [busy, setBusy] = React.useState(false);
     const [expansion, setExpansion] = React.useState({});

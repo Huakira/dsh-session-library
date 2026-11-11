@@ -33,7 +33,7 @@ export function sidebarAttention(row, pinned, statuses) {
 }
 
 /** Group only the bounded projection; counts use the full catalog, never log data. */
-export function groupSidebarRows(fullList, projected, workspace, folderState = {}, mode = 'folders') {
+export function groupSidebarRows(fullList, projected, workspace, folderState = {}, mode = 'folders', statuses = new Map()) {
   const folders = folderState.folders ?? [];
   const assignments = folderState.assignments ?? {};
   const projects = workspace.items ?? [];
@@ -68,7 +68,12 @@ export function groupSidebarRows(fullList, projected, workspace, folderState = {
   }
   const pinned = new Set(workspace.pinnedSessionIds ?? []);
   for (const row of Object.values(projected.byId)) ensure(descriptor(row)).rows.push(row);
-  for (const group of groups.values()) group.rows.sort((a, b) => Number(pinned.has(b.id)) - Number(pinned.has(a.id)) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0) || a.id.localeCompare(b.id));
+  // Host `updatedAt` only advances when a *user prompt* lands, so a session
+  // whose agent is mid-run ranks at its last prompt. Live activity (running,
+  // pending interaction, unread completion, currently open) floats to the top
+  // so the list reads as most-recently-active first.
+  const live = row => sidebarAttention(row, pinned, statuses);
+  for (const group of groups.values()) group.rows.sort((a, b) => Number(live(b)) - Number(live(a)) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0) || a.id.localeCompare(b.id));
   return [...groups.values()].filter(group => group.rows.length || group.folderId || group.total);
 }
 
