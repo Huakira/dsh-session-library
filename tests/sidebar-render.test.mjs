@@ -48,6 +48,7 @@ test('collapsing a group unmounts its rows; status dots mark running sessions', 
   let all = render();
   assert.equal(all.filter(n => n.props['data-dsl-session-row']).length, 5);
   assert.ok(all.some(n => n.type === 'span' && n.props.className === 'dsl-status-dot dsl-status-running' && n.props['aria-label'] === '正在运行'));
+  assert.equal(all.filter(n => typeof n.props.className === 'string' && n.props.className.startsWith('dsl-status-dot')).length, 1); // idle rows render no dot
   assert.ok(all.some(n => n.type === 'svg' && n.props['aria-label'] === '已置顶'));
   const titleButton = all.find(n => n.type === 'button' && (n.props.title ?? '').startsWith('r19'));
   assert.equal(titleButton.children[0].children[0], 'r19');

@@ -110,7 +110,7 @@ export function installSidebar(ctx, React, { openLibrary, useConfig, useFolders,
         : state?.pendingInteraction ? h('span', { className: 'dsl-status-dot dsl-status-attention', role: 'img', 'aria-label': '需要你处理', title: `需要你处理（${state.pendingInteraction.kind || 'interaction'}）` })
         : running ? h('span', { className: 'dsl-status-dot dsl-status-running', role: 'img', 'aria-label': '正在运行', title: '正在运行' })
         : state?.completionUnread ? h('span', { className: 'dsl-status-dot dsl-status-done', role: 'img', 'aria-label': '有新回复', title: '有新回复' })
-        : h('span', { className: 'dsl-status-dot', role: 'img', 'aria-label': '空闲', title: '' });
+        : null; // idle: no dot, only the fixed-size placeholder keeps the label from shifting
       return h('div', { key: row.id, 'data-dsl-session-row': row.id, onContextMenu: event => menu(event, row), style: { display: 'flex', alignItems: 'center', minWidth: 0, borderRadius: 'var(--dsw-radius-md)', background: active ? 'var(--dsw-alias-interactive-bg-hover)' : 'transparent' } },
         h('button', { type: 'button', title: tip, 'aria-current': active ? 'page' : undefined, onClick: () => open(row), style: { ...buttonStyle, display: 'flex', alignItems: 'center', gap: 6, flex: 1, minWidth: 0 } },
           h('span', { style: { overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis', minWidth: 0, flex: 1 } }, label),
