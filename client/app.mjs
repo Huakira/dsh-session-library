@@ -368,6 +368,7 @@ export function installLibrary(ctx, React) {
     }
     function openRow(row) {
       if (row.archived) { void view(row); return; }
+      sectionActions.activate(row.id);
       ctx.uiWorkspace.openSession(row.id); closeLibrary();
     }
     async function confirmAction() {
