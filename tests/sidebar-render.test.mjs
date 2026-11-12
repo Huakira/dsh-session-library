@@ -163,3 +163,55 @@ test('collapsing a group unmounts its rows; status dots mark running sessions', 
   all.find(n => n.type === 'button' && n.props['aria-label'] === '展开Research').props.onClick();
   assert.equal(render().filter(n => n.props['data-dsl-session-row']).length, 5);
 });
+
+test('unread dots survive a simulated restart and clear on viewing or running', () => {
+  let Component;
+  const refSlots = new Map();
+  let refIndex = 0;
+  const React = {
+    createElement: (type, props, ...children) => ({ type, props: props ?? {}, children }),
+    useMemo: compute => compute(), useDeferredValue: v => v,
+    useState: v => [v, () => {}], useRef: v => { const i = refIndex++; let slot = refSlots.get(i); if (!slot) { slot = { current: v }; refSlots.set(i, slot); } return slot; },
+    useEffect: fn => { fn(); }, useSyncExternalStore: (_sub, get) => get(),
+  };
+  const sections = { activeOrder: ['up1', 'up2'], inactiveOrder: [] };
+  installSidebar({ slots: { inject: (_, cb) => cb(), register: (_, comp) => { Component = comp; return () => {}; } } }, React, {
+    openLibrary() {}, useConfig: () => ({ sidebarLimit: 30, sidebarGrouping: 'recent', sectionView: 'all' }), useSections: () => sections,
+    sectionActions: { reconcile() {}, setRunning() {}, refresh() {}, activate() {} },
+  });
+  const mkList = retained => ({ ids: ['up1', 'up2'], phase: 'ready', byId: Object.fromEntries(['up1', 'up2'].map(id => [id, { id, displayTitle: id, updatedAt: 1, retainedBy: retained(id) }])) });
+  const props = statuses => ({ wide: true, useSessions: select => select(mkList(() => ({}))), useWorkspaces: select => select({}), useSessionStatus: select => select(statuses) });
+  const flatten = tree => { const all = []; const walk = node => { if (!node || typeof node !== 'object') return; all.push(node); for (const child of node.children ?? []) Array.isArray(child) ? child.forEach(walk) : walk(child); }; walk(tree); return all; };
+  const dotOf = (all, id) => { const row = all.find(n => n.props['data-dsl-session-row'] === id); const span = row.children[0].children.find(c => c && c.props && c.props['data-dsl-status'] !== undefined); return span.children[0] ? span.children[0].props.className : null; };
+  const mounted = p => { refIndex = 0; return flatten(Component(p)); };
+
+  // While unread is live in the host map the dot shows and is remembered.
+  // The remember hook only fires on a transition, so establish the baseline first.
+  let statuses = new Map();
+  let all = mounted(props(statuses));
+  statuses = new Map([['up1', { completionUnread: true }], ['up2', { completionUnread: true }]]);
+  all = mounted(props(statuses));
+  assert.equal(dotOf(all, 'up1'), 'dsl-status-dot dsl-status-done');
+
+  // Simulated restart: the host map comes back empty, the dot must survive.
+  statuses = new Map();
+  all = mounted(props(statuses));
+  assert.equal(dotOf(all, 'up1'), 'dsl-status-dot dsl-status-done');
+  assert.equal(dotOf(all, 'up2'), 'dsl-status-dot dsl-status-done');
+
+  // Viewing the row clears the remembered marker (host rule, plugin persisted).
+  statuses = new Map();
+  all = mounted(props(statuses));
+  const viewing = { ids: ['up1', 'up2'], phase: 'ready', byId: { up1: { id: 'up1', displayTitle: 'up1', updatedAt: 1, retainedBy: { mainView: 1 } }, up2: { id: 'up2', displayTitle: 'up2', updatedAt: 1, retainedBy: {} } } };
+  all = mounted({ ...props(statuses), useSessions: select => select(viewing) });
+  assert.equal(dotOf(all, 'up1'), null);
+  assert.equal(dotOf(all, 'up2'), 'dsl-status-dot dsl-status-done');
+
+  // A session that starts running clears its unread marker too.
+  statuses = new Map([['up2', { running: true }]]);
+  all = mounted(props(statuses));
+  assert.equal(dotOf(all, 'up2'), 'dsl-status-dot dsl-status-running');
+  statuses = new Map([['up2', { running: false }]]);
+  all = mounted(props(statuses));
+  assert.equal(dotOf(all, 'up2'), null);
+});

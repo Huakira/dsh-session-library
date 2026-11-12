@@ -1,20 +1,48 @@
 {
   "name": "dsh-session-library",
-  "version": "0.2.11",
+  "version": "0.2.12",
   "description": "Lightweight recent-session sidebar and a searchable, paginated session library with recoverable cleanup for DSH",
   "type": "module",
   "license": "MIT",
   "main": "./host/index.js",
-  "exports": { ".": "./host/index.js", "./client": "./lib/client.js", "./package.json": "./package.json" },
-  "files": ["host", "lib", "cordis.patch.yml", "README.md", "LICENSE", "THIRD_PARTY_NOTICES.md"],
-  "engines": { "node": ">=24.9.0", "dsh": ">=0.2.2-rc.1 <0.3.0" },
+  "exports": {
+    ".": "./host/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "host",
+    "lib",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md"
+  ],
+  "engines": {
+    "node": ">=24.9.0",
+    "dsh": ">=0.2.2-rc.1 <0.3.0"
+  },
   "dsh": {
-    "bundle": { "patch": "./cordis.patch.yml" },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
     "client": {
       "platform": "web",
-      "inject": ["@deepseek-ai/dsh-client-ui-workspace", "@deepseek-ai/dsh-client-ui-renderer", "@deepseek-ai/dsh-client-ui-settings", "@deepseek-ai/dsh-client-ui-context-menu"]
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-workspace",
+        "@deepseek-ai/dsh-client-ui-renderer",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-context-menu"
+      ]
     }
   },
-  "dependencies": { "@deepseek-ai/dsh-home-paths": "0.2.2-rc.1", "@deepseek-ai/dsh-session-query": "0.2.2-rc.1" },
-  "scripts": { "build": "node scripts/build.mjs", "test": "node --test tests/*.test.mjs", "check": "npm test && npm run build" }
+  "dependencies": {
+    "@deepseek-ai/dsh-home-paths": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-session-query": "0.2.2-rc.1"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "check": "npm test && npm run build"
+  }
 }
