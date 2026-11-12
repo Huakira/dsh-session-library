@@ -1,7 +1,7 @@
 import { failure, readPluginPost, sendJson } from './plugin-request.mjs'
 import { validSessionId, validTrashId } from './fs-safety.mjs'
 
-export function createLibraryRequestHandlers({ isTrustedRequest = () => false, trash, list, restore, preview }) {
+export function createLibraryRequestHandlers({ isTrustedRequest = () => false, trash, list, restore, preview, turnOutcomes }) {
   const execute = (operation, validate, confirmation, errorCode) => async (req, res) => {
     const body = await readPluginPost(req, res, isTrustedRequest, confirmation)
     if (body === undefined) return
@@ -32,5 +32,9 @@ export function createLibraryRequestHandlers({ isTrustedRequest = () => false, t
     list: execute(() => list(), body => body === null || typeof body !== 'object' || Array.isArray(body) ? '需要 JSON 对象。' : '', undefined, 'trash-list-unavailable'),
     restore: execute(body => restore(body.trashId), body => !validTrashId(body?.trashId) ? '回收站 ID 无效。' : '', 'restore-trash', 'restore-unavailable'),
     preview: execute((body, signal) => preview(body.sessionId, signal), body => !validSessionId(body?.sessionId) ? '会话 ID 无效。' : '', undefined, 'preview-unavailable'),
+    // Read-only: one batch of session ids answers whether each session's last
+    // turn ended in error (turn-level failures the host never broadcasts).
+    turnOutcomes: execute(body => turnOutcomes(body.sessionIds), body => !Array.isArray(body?.sessionIds)
+      || body.sessionIds.length > 25 || !body.sessionIds.every(id => typeof id === 'string' && validSessionId(id)) ? '会话列表无效。' : '', undefined, 'turn-outcomes-unavailable'),
   }
 }

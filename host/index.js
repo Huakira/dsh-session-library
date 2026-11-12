@@ -4,6 +4,7 @@ import { hostRequestFence } from './request-fence.mjs'
 import { createLibraryRequestHandlers } from './routes.mjs'
 import { listTrash, restoreTrashSafely, trashSessionSafely } from './trash-session.mjs'
 import { previewSession } from './preview.mjs'
+import { turnOutcomes } from './turn-outcome.mjs'
 import { createContentSearch, createContentSearchHandler } from './search.mjs'
 import { createFolderStore, createFolderRequestHandlers } from './folders.mjs'
 import { createDocumentReader } from './documents.mjs'
@@ -45,10 +46,11 @@ export function apply(ctx, config = {}) {
     list: () => listTrash(deps, options),
     restore: trashId => restoreTrashSafely(deps, { ...options, trashId }),
     preview: (sessionId, signal) => previewSession(queryDeps(), sessionId, signal),
+    turnOutcomes: sessionIds => turnOutcomes(queryDeps(), sessionIds),
   })
   for (const [path, handler] of [
     ['search', searchHandler], ['archive-search', archive.search], ['trash', handlers.trash],
-    ['trash-list', handlers.list], ['restore-trash', handlers.restore], ['preview', handlers.preview],
+    ['trash-list', handlers.list], ['restore-trash', handlers.restore], ['preview', handlers.preview], ['turn-outcomes', handlers.turnOutcomes],
     ...Object.entries(folderHandlers).map(([action, handler]) => [`folders/${action}`, handler]),
   ]) {
     ctx.effect(() => ctx.webServer.register({ kind: 'exact', path: `/plugins/dsh-session-library/${path}`, handler }), `dsh-session-library: ${path}`)
@@ -57,3 +59,4 @@ export function apply(ctx, config = {}) {
 
 export { createFolderStore, createFolderRequestHandlers, createContentSearch, createContentSearchHandler, hostRequestFence, createLibraryRequestHandlers, listTrash, restoreTrashSafely, trashSessionSafely, previewSession }
 export { createArchiveRequestHandlers, searchArchivedSessions, restoreArchivedSession, reconcileDeletedArchive } from './archive-manager.mjs'
+export { turnOutcomes } from './turn-outcome.mjs'
