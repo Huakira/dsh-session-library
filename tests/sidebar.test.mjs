@@ -105,9 +105,9 @@ test('group fold emits zero rows; expanded group includes old active attention b
   const pinned = new Set(workspace.pinnedSessionIds);
   assert.equal(visibleSidebarGroupRows(group, false, 5, pinned, statuses).length, 0);
   const visible = visibleSidebarGroupRows(group, true, 5, pinned, statuses);
-  // Live rows (retained current, running, pinned) now sort to the top, so the
-  // first five already include them; no attention row can fall beyond the cut.
-  assert.equal(visible.length, 5);
+  // Order is stable while reading, so attention rows can fall beyond the
+  // first five again; visibleSidebarGroupRows still surfaces them.
+  assert.equal(visible.length, 7);
   for (const id of ['s000', 's001', 's002']) assert.ok(visible.some(row => row.id === id));
   assert.equal(Object.keys(projection.list.byId).length, 33);
 });

@@ -80,7 +80,7 @@ test('cwd path fallback groups unaccounted sessions into the matching workspace'
  assert.equal(withProjects.find(g=>g.key==='project:w1').total,2);
  assert.equal(groups.find(g=>g.key==='ungrouped').total,2);
 });
-test('live sessions float above newer idle rows in group order',()=>{
+test('reading a session never reshuffles the list; only pins and activity time decide rank',()=>{
  const ids=['idle-new','running-old'];
  const sessions={ids,byId:{
   'idle-new':{id:'idle-new',displayTitle:'新但空闲',cwd:'/w',updatedAt:200},
@@ -88,9 +88,16 @@ test('live sessions float above newer idle rows in group order',()=>{
  }};
  const workspaces={items:[{workspaceId:'w1',title:'研究',path:'/w',sessionIds:[]}],archivedSessionIds:[],pinnedSessionIds:[]};
  const statuses=new Map([['running-old',{running:true}]]);
- const groups=groupSidebarRows(sessions,sessions,workspaces,{},'folders',statuses);
- const rows=groups.find(g=>g.key==='project:w1').rows;
- assert.deepEqual(rows.map(r=>r.id),['running-old','idle-new']);
- const noStatus=groupSidebarRows(sessions,sessions,workspaces,{},'folders');
- assert.deepEqual(noStatus.find(g=>g.key==='project:w1').rows.map(r=>r.id),['idle-new','running-old']);
+ const order=()=>groupSidebarRows(sessions,sessions,workspaces,{},'folders').find(g=>g.key==='project:w1').rows.map(r=>r.id);
+ // Transient states (passed as the 6th legacy arg, ignored) do not change order.
+ assert.deepEqual(order(),['idle-new','running-old']);
+ assert.deepEqual(groupSidebarRows(sessions,sessions,workspaces,{},'folders',statuses).find(g=>g.key==='project:w1').rows.map(r=>r.id),['idle-new','running-old']);
+ // Clicking through to read: the older session becomes the current one, but
+ // still stays in its activity-time slot instead of jumping to the top.
+ sessions.byId['running-old'].retainedBy={mainView:1};
+ sessions.byId['running-old'].completionUnread=false;
+ assert.deepEqual(order(),['idle-new','running-old']);
+ // A durable pin is the only state allowed to promote a row.
+ workspaces.pinnedSessionIds=['running-old'];
+ assert.deepEqual(order(),['running-old','idle-new']);
 });

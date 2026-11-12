@@ -33,7 +33,7 @@ export function sidebarAttention(row, pinned, statuses) {
 }
 
 /** Group only the bounded projection; counts use the full catalog, never log data. */
-export function groupSidebarRows(fullList, projected, workspace, folderState = {}, mode = 'folders', statuses = new Map()) {
+export function groupSidebarRows(fullList, projected, workspace, folderState = {}, mode = 'folders') {
   const folders = folderState.folders ?? [];
   const assignments = folderState.assignments ?? {};
   const projects = workspace.items ?? [];
@@ -68,12 +68,12 @@ export function groupSidebarRows(fullList, projected, workspace, folderState = {
   }
   const pinned = new Set(workspace.pinnedSessionIds ?? []);
   for (const row of Object.values(projected.byId)) ensure(descriptor(row)).rows.push(row);
-  // Host `updatedAt` only advances when a *user prompt* lands, so a session
-  // whose agent is mid-run ranks at its last prompt. Live activity (running,
-  // pending interaction, unread completion, currently open) floats to the top
-  // so the list reads as most-recently-active first.
-  const live = row => sidebarAttention(row, pinned, statuses);
-  for (const group of groups.values()) group.rows.sort((a, b) => Number(live(b)) - Number(live(a)) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0) || a.id.localeCompare(b.id));
+  // Keep the order stable while reading: only durable facts decide rank — the
+  // official pin and the host's activity timestamp. Transient state (currently
+  // open, unread completion, running, pending interaction) is shown as a dot
+  // and keeps the row inside the bounded projection, but never reshuffles the
+  // list. Clicking through sessions to read them must not move rows around.
+  for (const group of groups.values()) group.rows.sort((a, b) => Number(pinned.has(b.id)) - Number(pinned.has(a.id)) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0) || a.id.localeCompare(b.id));
   return [...groups.values()].filter(group => group.rows.length || group.folderId || group.total);
 }
 
