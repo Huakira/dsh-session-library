@@ -18,7 +18,7 @@ import { installSidebar } from '../client/sidebar.mjs';
     openLibrary() {}, useConfig: () => config, onConfigChange: v => changes.push(v), useSections: () => sections,
     sectionActions: { reconcile: ids => calls.push(ids), setRunning() {}, refresh() {}, activate() {} },
   });
-  const list = { phase: 'ready', ids: ['a', 'b', 'blank'], byId: Object.fromEntries(['a','b','blank'].map(id => [id, { id, displayTitle: id, blank: id === 'blank' }])) };
+  const list = { phase: 'ready', ids: ['a', 'b', 'blank'], byId: Object.fromEntries(['a','b','blank'].map(id => [id, { id, displayTitle: id, blank: id === 'blank', retainedBy: id === 'blank' ? { mainView: 1 } : {} }])) };
   const statuses = new Map([['b', { completionUnread: true }]]);
   const props = { wide: true, useSessions: fn => fn(list), useWorkspaces: fn => fn({}), useSessionStatus: fn => fn(statuses) };
   const render = () => {
@@ -27,7 +27,7 @@ import { installSidebar } from '../client/sidebar.mjs';
   let all = render();
   assert.deepEqual(all.filter(n => n.props['data-dsl-session-row']).map(n => n.props['data-dsl-session-row']), ['blank','a','b']);
   assert.equal(all.filter(n => n.props['data-dsl-section-divider'] !== undefined).length, 1);
-  all.find(n => n.type === 'button' && n.props.title?.split('\n')[0] === 'b').props.onClick();
+  all.find(n => n.type === 'button' && n.props['data-dsl-tip']?.split('\n')[0] === 'b').props.onClick();
   assert.equal(selected, 'b');
   assert.equal(all.filter(n => n.props.className === 'dsl-status-dot dsl-status-done').length, 1);
   statuses.set('b', { completionUnread: false });
@@ -35,7 +35,7 @@ import { installSidebar } from '../client/sidebar.mjs';
   assert.equal(all.filter(n => n.props.className === 'dsl-status-dot dsl-status-done').length, 0);
   assert.deepEqual(all.filter(n => n.props['data-dsl-session-row']).map(n => n.props['data-dsl-session-row']), ['blank','a','b']);
   assert.deepEqual(sections.activeOrder, ['blank', 'a']);
-  all.find(n => n.type === 'button' && n.children.includes('Inactive')).props.onClick();
+  all.find(n => n.type === 'button' && n.props['aria-label'] === 'Inactive').props.onClick();
   assert.deepEqual(changes, [{ sectionView: 'inactive' }]);
   config.sectionView = 'inactive'; all = render();
   assert.deepEqual(all.filter(n => n.props['data-dsl-section']).map(n => n.props['data-dsl-section']), ['inactive']);
@@ -86,7 +86,7 @@ test('three thousand catalog rows create only thirty recent row components and n
   const flat = [];
   function visit(node) { if (!node || typeof node !== 'object') return; flat.push(node); for (const child of node.children ?? []) if (Array.isArray(child)) child.forEach(visit); else visit(child); }
   visit(tree);
-  const rowButtons = flat.filter(n => n.type === 'button' && n.props['aria-current'] !== undefined || n.type === 'button' && /^s\d+/.test((n.props.title ?? '').split('\n')[0]));
+  const rowButtons = flat.filter(n => n.type === 'button' && n.props['aria-current'] !== undefined || n.type === 'button' && /^s\d+/.test((n.props['data-dsl-tip'] ?? '').split('\n')[0]));
   assert.equal(rowButtons.length, 30);
   assert.ok(flat.length < 400);
   rowButtons[0].props.onClick();
@@ -119,12 +119,12 @@ test('collapsing a group unmounts its rows; status dots mark running sessions', 
   assert.ok(all.some(n => n.type === 'span' && n.props.className === 'dsl-status-dot dsl-status-running' && n.props['aria-label'] === '正在运行'));
   assert.equal(all.filter(n => typeof n.props.className === 'string' && n.props.className.startsWith('dsl-status-dot')).length, 1); // idle rows render no dot
   assert.ok(all.some(n => n.type === 'svg' && n.props['aria-label'] === '已置顶'));
-  const titleButton = all.find(n => n.type === 'button' && (n.props.title ?? '').startsWith('r19'));
+  const titleButton = all.find(n => n.type === 'button' && (n.props['data-dsl-tip'] ?? '').startsWith('r19'));
   assert.equal(titleButton.children[0].children[0], 'r19');
   all.find(n => n.type === 'button' && n.props['aria-label'] === '收起Research').props.onClick();
   all = render();
   assert.equal(all.filter(n => n.props['data-dsl-session-row']).length, 0);
-  assert.equal(all.some(n => n.props.title === 'r19'), false);
+  assert.equal(all.some(n => n.props['data-dsl-tip'] === 'r19'), false);
   all.find(n => n.type === 'button' && n.props['aria-label'] === '展开Research').props.onClick();
   assert.equal(render().filter(n => n.props['data-dsl-session-row']).length, 5);
 });

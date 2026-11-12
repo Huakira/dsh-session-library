@@ -1,14 +1,16 @@
+import { installSidebarTooltips } from './tooltips.mjs';
 import { normalizeConfig, libraryRows, paginateRows, groupedLibraryRows } from './library-model.mjs';
 import { installSidebar } from './sidebar.mjs';
 import { createFolderStore } from './folders.mjs';
 import { installListCoalesce } from './list-coalesce.mjs';
-import { emptySectionState, normalizeSectionState, reconcileSections, activateSession, refreshSession, removeSession, runDemotions, DEMOTE_INTERVAL } from './section-model.mjs';
+import { emptySectionState, normalizeSectionState, reconcileSections, activateSession, refreshSession, removeSession, runDemotions, DEMOTE_INTERVAL, INACTIVITY_THRESHOLD } from './section-model.mjs';
 
 // Install at module scope (factory call), which precedes apply() and therefore
 // the boot-time session/list pair this coalesces.
 installListCoalesce(typeof window !== 'undefined' ? window : undefined);
 
 export function installLibrary(ctx, React) {
+  ctx.effect(() => installSidebarTooltips(), 'session-library delayed tooltips');
   const h = React.createElement;
   const STORAGE_KEY = 'dsh-session-library.config.v1';
   let config;
@@ -102,10 +104,15 @@ export function installLibrary(ctx, React) {
   // in this browser's storage, so a plain refresh never reshuffles the list.
   const SECTION_KEY = 'dsh-session-library.sections.v1';
   let sectionState;
-  try { sectionState = normalizeSectionState(JSON.parse(localStorage.getItem(SECTION_KEY) || 'null')); } catch { sectionState = emptySectionState(); }
+  let legacyAutomaticFloor = false;
+  try {
+    const stored = JSON.parse(localStorage.getItem(SECTION_KEY) || 'null');
+    legacyAutomaticFloor = !!stored && stored.policy !== 2;
+    sectionState = normalizeSectionState(stored);
+  } catch { sectionState = emptySectionState(); }
   // React only re-renders when an ORDER changes. lastActivity ticks are silent:
   // they feed the demotion clock, not the visible layout.
-  let sectionSnapshot = { activeOrder: sectionState.activeOrder, inactiveOrder: sectionState.inactiveOrder };
+  let sectionSnapshot = { activeOrder: sectionState.activeOrder, inactiveOrder: sectionState.inactiveOrder, lastActivity: sectionState.lastActivity };
   const sectionListeners = new Set();
   const subscribeSections = fn => { sectionListeners.add(fn); return () => sectionListeners.delete(fn); };
   const getSections = () => sectionSnapshot;
@@ -115,12 +122,12 @@ export function installLibrary(ctx, React) {
     if (sectionPersistTimer) return;
     sectionPersistTimer = setTimeout(() => {
       sectionPersistTimer = 0;
-      try { localStorage.setItem(SECTION_KEY, JSON.stringify(sectionState)); } catch { /* private mode */ }
+      try { localStorage.setItem(SECTION_KEY, JSON.stringify({ ...sectionState, policy: 2 })); } catch { /* private mode */ }
     }, 800);
   };
   const publishSections = next => {
     sectionState = next;
-    sectionSnapshot = { activeOrder: next.activeOrder, inactiveOrder: next.inactiveOrder };
+    sectionSnapshot = { activeOrder: next.activeOrder, inactiveOrder: next.inactiveOrder, lastActivity: next.lastActivity };
     scheduleSectionPersist();
     for (const fn of sectionListeners) fn();
   };
@@ -133,6 +140,14 @@ export function installLibrary(ctx, React) {
       sectionPinnedIds = pinnedIds;
       sectionBlankIds = blankIds;
       const now = Date.now();
+      if (legacyAutomaticFloor) {
+        legacyAutomaticFloor = false;
+        const protectedIds = new Set([...pinnedIds, ...blankIds, ...runningIds]);
+        const stale = sectionState.activeOrder.filter(id => !protectedIds.has(id) && now - (sectionState.lastActivity[id] ?? 0) > INACTIVITY_THRESHOLD);
+        const staleSet = new Set(stale);
+        sectionState = { ...sectionState, activeOrder: sectionState.activeOrder.filter(id => !staleSet.has(id)), inactiveOrder: [...stale.sort((a, b) => sectionState.lastActivity[b] - sectionState.lastActivity[a]), ...sectionState.inactiveOrder] };
+        publishSections(sectionState);
+      }
       let next = reconcileSections(sectionState, ids, { now, activityOf, pinnedIds, blankIds });
       // One catch-up beat per page load: sessions that aged out while the tab
       // was closed should not sit in the active section for a whole minute.
@@ -220,7 +235,7 @@ export function installLibrary(ctx, React) {
       h('label', null, text('管理页每页条数', 'Sessions per page'),
         h('select', { value: value.pageSize, onChange: e => setConfig({ pageSize: +e.target.value }) },
           ...[25, 50, 100].map(n => h('option', { key: n, value: n }, n)))),
-      h('p', { className: 'dsl-hint' }, text('侧边栏顶部的「活跃 / 非活跃 / 全部」切换会话分区：15 分钟内有动作的会话留在活跃区（至少保留 8 个），其余按每分钟一次的节拍落到非活跃区顶部；发消息或置顶会把会话移到列表最顶部。区内顺序固定，只有激活和降级会移动会话，所以点开阅读或状态点变化都不会让列表跳动。置顶会话固定浮在最上方。会话区高度按侧栏总高的百分比调整：低于自然高度时收窄会话区（列表内部滚动）；高于自然高度时把上方面板逐个折进「更多」菜单（始终保留插件入口）。设置保存在此浏览器。', 'The Active / Inactive / All switch at the top of the sidebar controls the two sections: sessions with activity in the last 15 minutes stay Active (at least 8 are kept), the rest drift to the top of Inactive on a one-minute beat. Sending a message or pinning moves a session to the very top of the list. Order inside a section is frozen — only activation and demotion move a row, so reading a session or a status-dot change never reshuffles the list. Pinned sessions always float above both sections. The session-area height is a percentage of the sidebar: below the natural height the session area shrinks (the list scrolls inside); above it, panel rows fold into the "More" menu one by one (the Plugins entry always stays). Settings are saved in this browser.')));
+      h('p', { className: 'dsl-hint' }, text('侧边栏顶部的「活跃 / 非活跃 / 全部」切换会话分区：15 分钟内有动作的会话留在活跃区（不超过 8 个时停止超时移出）；「全部」视图不补齐，「活跃」视图不足 8 条时临时补充显示最近的非活跃会话，不改变分区，其余按每分钟一次的节拍落到非活跃区顶部；发消息或置顶会把会话移到列表最顶部。区内顺序固定，只有激活和降级会移动会话，所以点开阅读或状态点变化都不会让列表跳动。置顶会话固定浮在最上方。会话区高度按侧栏总高的百分比调整：低于自然高度时收窄会话区（列表内部滚动）；高于自然高度时把上方面板逐个折进「更多」菜单（始终保留插件入口）。设置保存在此浏览器。', 'The Active / Inactive / All switch at the top of the sidebar controls the two sections: sessions with activity in the last 15 minutes stay Active (timeout demotion stops at 8 or fewer). All shows true section membership; Active alone borrows recent Inactive rows to show at least eight without changing membership, the rest drift to the top of Inactive on a one-minute beat. Sending a message or pinning moves a session to the very top of the list. Order inside a section is frozen — only activation and demotion move a row, so reading a session or a status-dot change never reshuffles the list. Pinned sessions always float above both sections. The session-area height is a percentage of the sidebar: below the natural height the session area shrinks (the list scrolls inside); above it, panel rows fold into the "More" menu one by one (the Plugins entry always stays). Settings are saved in this browser.')));
   }
   function Settings() {
     return h('section', { className: 'dsl-settings' }, h('h2', null, text('会话库', 'Session library')), h(Configuration),

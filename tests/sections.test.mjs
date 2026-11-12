@@ -130,7 +130,8 @@ test('blank and pinned rows survive initial seeding and catch-up without consumi
   const ids = ['a','b','c','pin','blank'];
   const options = { now: 10000, threshold: 1, minActiveCount: 2, pinnedIds: ['pin'], blankIds: ['blank'] };
   const seeded = reconcileSections(emptySectionState(), ids, { ...options, activityOf: id => ({ a: 5, b: 4, c: 3 }[id] ?? 0) });
-  assert.deepEqual(seeded.activeOrder, ['blank','a','b','pin']);
+  assert.deepEqual(seeded.activeOrder, ['blank','pin']);
+  assert.deepEqual(seeded.inactiveOrder, ['a','b','c']);
   assert.deepEqual(runDemotions(seeded, options).activeOrder, seeded.activeOrder);
   const old = { lastActivity: seeded.lastActivity, activeOrder: ['a','b'], inactiveOrder: ['blank','pin','c'] };
   const recovered = reconcileSections(old, ids, options);
@@ -142,6 +143,13 @@ test('blank and pinned rows survive initial seeding and catch-up without consumi
 test('pin order follows activation order instead of catalog order', () => {
   const state = { lastActivity: {}, activeOrder: ['b','a','c'], inactiveOrder: [] };
   assert.deepEqual(selectSections(state, { pinnedIds: ['a','b'] }).pinnedIds, ['b','a']);
+});
+
+test('removing historical empty rows never pads the active section from inactive sessions', () => {
+  const old = { lastActivity: { blank: 0, a: 3, b: 2, c: 1 }, activeOrder: ['blank'], inactiveOrder: ['c','a','b'] };
+  const next = reconcileSections(old, ['a','b','c'], { minActiveCount: 2 });
+  assert.deepEqual(next.activeOrder, []);
+  assert.deepEqual(next.inactiveOrder, ['c','a','b']);
 });
 
 test('replayed activation cannot move the activity clock backwards', () => {
@@ -178,7 +186,7 @@ test('selectSections spends the global budget on active rows first', () => {
   assert.deepEqual(all.inactiveIds, ['e']);
   assert.equal(all.showDivider, true);
   const active = selectSections(state, { view: 'active', limit: 5 });
-  assert.deepEqual(active.activeIds, ['a', 'b', 'c', 'd']);
+  assert.deepEqual(active.activeIds, ['a', 'b', 'c', 'd', 'e']);
   assert.deepEqual(active.inactiveIds, []);
   assert.equal(active.showDivider, false);
   const inactive = selectSections(state, { view: 'inactive', limit: 5 });
@@ -197,6 +205,25 @@ test('pinned rows float above both sections and consume the same budget', () => 
   // No active rows left => no dashed divider.
   const onlyInactive = selectSections(state, { view: 'all', limit: 1, pinnedIds: ['a'] });
   assert.equal(onlyInactive.showDivider, false);
+});
+
+test('only the Active view borrows up to eight rows without changing membership or frozen order', () => {
+  const state = {
+    lastActivity: { c: 20, d: 80, e: 70, f: 60, g: 50, h: 40, i: 30, j: 10 },
+    activeOrder: ['a', 'b'], inactiveOrder: ['c', 'd', 'e', 'f', 'g', 'h', 'i', 'j'],
+  };
+  const before = JSON.stringify(state);
+  const all = selectSections(state, { view: 'all' });
+  assert.deepEqual(all.activeIds, ['a', 'b']);
+  assert.deepEqual(all.inactiveIds, state.inactiveOrder);
+  assert.equal(all.showDivider, true);
+  const active = selectSections(state, { view: 'active' });
+  assert.deepEqual(active.activeIds, ['a', 'b', 'd', 'e', 'f', 'g', 'h', 'i']);
+  assert.deepEqual(active.inactiveIds, []);
+  assert.equal(active.showDivider, false);
+  assert.equal(JSON.stringify(state), before);
+  assert.deepEqual(selectSections(state, { view: 'inactive' }).inactiveIds, state.inactiveOrder);
+  assert.deepEqual(selectSections(state, { view: 'all' }), all);
 });
 
 test('selectSections normalizes a bad view and a bad limit', () => {

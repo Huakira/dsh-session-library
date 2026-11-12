@@ -16,7 +16,7 @@ export function eligibleSidebarRows(list, workspace, { includeBlank = false } = 
   const all = list.byId ?? {};
   const ids = (list.ids ?? []).filter(id => {
     const row = all[id];
-    return row && (includeBlank || !row.blank) && row.origin !== 'subagent' && !archived.has(id);
+    return row && (!row.blank || includeBlank === true || (includeBlank === 'current' && (row.retainedBy?.mainView ?? 0) > 0)) && row.origin !== 'subagent' && !archived.has(id);
   });
   return { ids, pinnedIds: ids.filter(id => pinned.has(id)), byId: all };
 }

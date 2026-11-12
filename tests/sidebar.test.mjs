@@ -3,6 +3,11 @@ import assert from 'node:assert/strict';
 import { projectSidebarList, normalizeSidebarLimit, groupSidebarRows, groupSectionRows, visibleSidebarGroupRows, eligibleSidebarRows } from '../client/sidebar-model.mjs';
 import { installSidebar } from '../client/sidebar.mjs';
 
+test('only the currently open blank session is eligible, historical empty sessions stay hidden', () => {
+  const list = { ids: ['old','current','real'], byId: { old: { id: 'old', blank: true }, current: { id: 'current', blank: true, retainedBy: { mainView: 1 } }, real: { id: 'real', blank: false } } };
+  assert.deepEqual(eligibleSidebarRows(list, {}, { includeBlank: 'current' }).ids, ['current','real']);
+});
+
 function fixture(count = 100) {
   const ids = Array.from({ length: count }, (_, i) => `s${String(i).padStart(3, '0')}`);
   const byId = Object.fromEntries(ids.map((id, i) => [id, { id, updatedAt: i, running: false, retainedBy: {}, blank: false }]));

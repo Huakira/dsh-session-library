@@ -1,3 +1,4 @@
+import { createDirectoryPicker } from './directory-picker.mjs';
 import { projectSidebarList, groupSidebarRows, groupSectionRows, visibleSidebarGroupRows, eligibleSidebarRows } from './sidebar-model.mjs';
 import { normalizeSectionView, selectSections, SECTION_GROUP_CAP } from './section-model.mjs';
 
@@ -6,18 +7,19 @@ const SIDEBAR_SLOT = 'sidebar.workspaces';
 /** Replace only the public browsing region; dispose reveals the official region. */
 export function installSidebar(ctx, React, { openLibrary, useConfig, useFolders, folderActions = {}, onConfigChange, workspaceRequest, useSessionErrors, useSections, sectionActions }) {
   const h = React.createElement;
+  const DirectoryPicker = createDirectoryPicker(React);
   const text = (zh, en) => ctx.locale?.getSnapshot?.().active === 'zh' ? zh : en;
   const buttonStyle = { cursor: 'pointer', color: 'var(--dsw-alias-label-primary)', background: 'transparent', border: 0, borderRadius: 'var(--dsw-radius-md)', padding: '7px 9px', font: 'inherit', textAlign: 'left' };
   const icon = (kind, label) => {
     const paths = {
-      running: 'M12 3a9 9 0 0 1 9 9', waiting: 'M12 8v5m0 3h.01M12 3 2 21h20L12 3Z',
+      active: 'm13 2-9 12h7l-1 8 10-12h-7l1-8Z', inactive: 'M20 15a9 9 0 0 1-11-11 9 9 0 1 0 11 11Z', all: 'M4 6h16M4 12h16M4 18h16', running: 'M12 3a9 9 0 0 1 9 9', waiting: 'M12 8v5m0 3h.01M12 3 2 21h20L12 3Z',
       unread: 'm5 12 4 4L19 6', pin: 'm15 3 6 6-4 1-4 4-1 4-3-3-6 6 6-6-3-3 4-1 4-4 1-4Z',
       folder: 'M3 7h7l2 2h9v11H3V7Zm0 0V4h7l2 3', more: 'M5 12h.01M12 12h.01M19 12h.01',
       down: 'm7 10 5 5 5-5', right: 'm10 7 5 5-5 5', plus: 'M12 5v14M5 12h14',
       library: 'M4 4h4v16H4V4Zm6 0h4v16h-4V4Zm7 0 4 15-4 1-4-15 4-1Z',
       chat: 'M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5Z',
     };
-    return h('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.7, strokeLinecap: 'round', strokeLinejoin: 'round', role: 'img', 'aria-label': label, className: kind === 'running' ? 'dsl-runtime-spinner' : undefined, style: { flex: 'none', color: kind === 'waiting' ? 'var(--dsw-alias-state-warning-primary,#a36516)' : kind === 'unread' ? 'var(--dsw-alias-state-business-primary,#3975b5)' : 'var(--dsw-alias-label-secondary)' } }, h('title', null, label), h('path', { d: paths[kind] }));
+    return h('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.7, strokeLinecap: 'round', strokeLinejoin: 'round', role: 'img', 'aria-label': label, className: kind === 'running' ? 'dsl-runtime-spinner' : undefined, style: { flex: 'none', color: kind === 'waiting' ? 'var(--dsw-alias-state-warning-primary,#a36516)' : kind === 'unread' ? 'var(--dsw-alias-state-business-primary,#3975b5)' : 'var(--dsw-alias-label-secondary)' } }, h('path', { d: paths[kind] }));
   };
 
   function RecentSidebar(props) {
@@ -50,7 +52,7 @@ export function installSidebar(ctx, React, { openLibrary, useConfig, useFolders,
     const pinned = React.useMemo(() => new Set(workspace.pinnedSessionIds ?? []), [workspace.pinnedSessionIds]);
     const archived = React.useMemo(() => new Set(workspace.archivedSessionIds ?? []), [workspace.archivedSessionIds]);
     const grouping = ['recent', 'projects', 'folders'].includes(config?.sidebarGrouping) ? config.sidebarGrouping : 'folders';
-    const eligible = React.useMemo(() => eligibleSidebarRows(list, workspace, { includeBlank: !!sectionActions }), [list.ids, list.byId, workspace.pinnedSessionIds, workspace.archivedSessionIds]);
+    const eligible = React.useMemo(() => eligibleSidebarRows(list, workspace, { includeBlank: sectionActions ? 'current' : false }), [list.ids, list.byId, workspace.pinnedSessionIds, workspace.archivedSessionIds]);
 
     // Reconcile the frozen orders with the catalog. Idempotent: existing rows
     // never move, only genuinely new ids are seeded (newest activity first).
@@ -109,6 +111,8 @@ export function installSidebar(ctx, React, { openLibrary, useConfig, useFolders,
     }, [sections, list, projection.list, workspace, folders, grouping, needle]);
     const [error, setError] = React.useState('');
     const [busy, setBusy] = React.useState(false);
+    const [pickingDirectory, setPickingDirectory] = React.useState(false);
+    const directoryNavigation = React.useMemo(() => ctx.get?.('uiWorkspace'), []);
     const [expansion, setExpansion] = React.useState({});
     const [moreSections, setMoreSections] = React.useState({});
     const open = row => {
@@ -151,23 +155,23 @@ export function installSidebar(ctx, React, { openLibrary, useConfig, useFolders,
     // The ⋯ button shows for every real workspace; access checks happen at
     // action time on the official workspaces API.
     const WorkspaceGroupMenu = ({ group }) => {
-      return h('button', { type: 'button', 'aria-label': `工作区“${group.name}”的操作`, title: '工作区操作（重命名、删除）', onClick: event => openWorkspaceMenu(event, group), style: { ...buttonStyle, padding: 6, display: 'flex' } }, icon('more', '工作区操作'));
+      return h('button', { type: 'button', 'aria-label': `工作区“${group.name}”的操作`, 'data-dsl-tip': '工作区操作（重命名、删除）', onClick: event => openWorkspaceMenu(event, group), style: { ...buttonStyle, padding: 6, display: 'flex' } }, icon('more', '工作区操作'));
     };
     const rowView = row => {
       const state = statuses.get(row.id);
       const active = (row.retainedBy?.mainView ?? 0) > 0;
       const running = state?.running ?? row.running;
-      const label = row.displayTitle ?? row.title ?? (row.blank ? '新会话' : row.id);
+      const label = row.blank ? text('新会话', 'New session') : row.displayTitle ?? row.title ?? row.id;
       const cwd = list.byId?.[row.id]?.cwd;
       const tip = [label, cwd ? abbreviate(cwd) : '无固定目录', row.createdAt ? `创建于 ${new Date(row.createdAt).toLocaleString()}（${relative(row.createdAt)}）` : ''].filter(Boolean).join('\n');
       // Colored status dot; error outranks attention, running, then unread replies.
-      const dot = errored.has(row.id) ? h('span', { className: 'dsl-status-dot dsl-status-error', role: 'img', 'aria-label': '出错', title: '会话出错' })
-        : state?.pendingInteraction ? h('span', { className: 'dsl-status-dot dsl-status-attention', role: 'img', 'aria-label': '需要你处理', title: `需要你处理（${state.pendingInteraction.kind || 'interaction'}）` })
-        : running ? h('span', { className: 'dsl-status-dot dsl-status-running', role: 'img', 'aria-label': '正在运行', title: '正在运行' })
-        : state?.completionUnread ? h('span', { className: 'dsl-status-dot dsl-status-done', role: 'img', 'aria-label': '有新回复', title: '有新回复' })
+      const dot = errored.has(row.id) ? h('span', { className: 'dsl-status-dot dsl-status-error', role: 'img', 'aria-label': '出错', 'data-dsl-tip': '会话出错' })
+        : state?.pendingInteraction ? h('span', { className: 'dsl-status-dot dsl-status-attention', role: 'img', 'aria-label': '需要你处理', 'data-dsl-tip': `需要你处理（${state.pendingInteraction.kind || 'interaction'}）` })
+        : running ? h('span', { className: 'dsl-status-dot dsl-status-running', role: 'img', 'aria-label': '正在运行', 'data-dsl-tip': '正在运行' })
+        : state?.completionUnread ? h('span', { className: 'dsl-status-dot dsl-status-done', role: 'img', 'aria-label': '有新回复', 'data-dsl-tip': '有新回复' })
         : null; // idle: no dot, only the fixed-size placeholder keeps the label from shifting
       return h('div', { key: row.id, 'data-dsl-session-row': row.id, onContextMenu: event => menu(event, row), style: { display: 'flex', alignItems: 'center', minWidth: 0, borderRadius: 'var(--dsw-radius-md)', background: active ? 'var(--dsw-alias-interactive-bg-hover)' : 'transparent' } },
-        h('button', { type: 'button', title: tip, 'aria-current': active ? 'page' : undefined, onClick: () => open(row), style: { ...buttonStyle, display: 'flex', alignItems: 'center', gap: 6, flex: 1, minWidth: 0 } },
+        h('button', { type: 'button', 'data-dsl-tip': tip, 'aria-label': label, 'aria-current': active ? 'page' : undefined, onClick: () => open(row), style: { ...buttonStyle, display: 'flex', alignItems: 'center', gap: 6, flex: 1, minWidth: 0 } },
           h('span', { style: { overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis', minWidth: 0, flex: 1 } }, label),
           pinned.has(row.id) && icon('pin', '已置顶'),
           h('span', { 'data-dsl-status': '', style: { width: 16, height: 16, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flex: 'none' } }, dot)),
@@ -189,7 +193,7 @@ export function installSidebar(ctx, React, { openLibrary, useConfig, useFolders,
             h('span', { style: { opacity: .65, flex: 'none' } }, String(group.total))),
           !group.folderId && group.workspaceId && group.workspaceId !== '__ungrouped__' && h(WorkspaceGroupMenu, { key: `menu-${gk}`, group }),
           group.folderId && folderActions.manage && h('button', { type: 'button', 'aria-label': `管理文件夹${group.name}`, onClick: () => folderActions.manage({ id: group.folderId, name: group.name }), style: { ...buttonStyle, padding: 6, display: 'flex' } }, icon('more', '管理文件夹')),
-          !needle && h('button', { type: 'button', 'aria-label': `在${group.name}中新建会话`, title: `在“${group.name}”中新建会话`, disabled: busy, onClick: () => void startSession(group.workspaceId && group.workspaceId !== '__ungrouped__' ? group.workspaceId : undefined), style: { ...buttonStyle, padding: 6, display: 'flex' } }, icon('plus', '新会话'))),
+          !needle && h('button', { type: 'button', 'aria-label': `在${group.name}中新建会话`, 'data-dsl-tip': `在“${group.name}”中新建会话`, disabled: busy, onClick: () => void startSession(group.workspaceId && group.workspaceId !== '__ungrouped__' ? group.workspaceId : undefined), style: { ...buttonStyle, padding: 6, display: 'flex' } }, icon('plus', '新会话'))),
         expanded && h('div', { style: { paddingLeft: 9 } }, ...rows.map(rowView),
           rows.length === 0 && h('div', { style: { padding: '5px 9px', fontSize: 12, color: 'var(--dsw-alias-label-tertiary)' } }, needle ? '此组没有匹配的会话' : group.total ? '此组暂无最近会话' : '空文件夹'),
           !section && (group.total > rows.length) && h('button', { type: 'button', onClick: () => openLibrary(needle ? { kind: 'query', query: needle, value: filter } : filter), style: { ...buttonStyle, fontSize: 12, color: 'var(--dsw-alias-label-secondary)' } }, needle ? `在会话库中搜索“${needle}”` : `查看全部 ${group.total} 条`),
@@ -207,18 +211,8 @@ export function installSidebar(ctx, React, { openLibrary, useConfig, useFolders,
           ? text('此区没有匹配的会话', 'No matching sessions in this section')
           : section === 'active' ? text('暂无活跃会话', 'No active sessions') : text('暂无非活跃会话', 'No inactive sessions')));
     };
-    if (!props.wide) return h('button', { type: 'button', title: '全部会话', 'aria-label': '全部会话', onClick: () => openLibrary(), style: { ...buttonStyle, display: 'flex', justifyContent: 'center' } }, icon('library', '全部会话'));
-    const addWorkspace = async () => {
-      if (busy) return;
-      setBusy(true); setError('');
-      try {
-        const navigation = ctx.get('uiWorkspace');
-        const path = await navigation?.pickDirectory?.();
-        if (!path) return;
-        await ctx.workspaces.create({ path });
-      } catch (reason) { setError(String(reason?.message ?? reason)); }
-      finally { setBusy(false); }
-    };
+    if (!props.wide) return h('button', { type: 'button', 'data-dsl-tip': '全部会话', 'aria-label': '全部会话', onClick: () => openLibrary(), style: { ...buttonStyle, display: 'flex', justifyContent: 'center' } }, icon('library', '全部会话'));
+    const addWorkspace = () => { setError(''); setPickingDirectory(true); };
     const pendingWorkspace = workspaceRequest ? React.useSyncExternalStore(workspaceRequest.subscribe, workspaceRequest.get, () => null) : null;
     const applyWorkspace = async action => {
       const target = workspaceRequest?.get();
@@ -232,11 +226,11 @@ export function installSidebar(ctx, React, { openLibrary, useConfig, useFolders,
       finally { setBusy(false); }
     };
     const segment = (key, zh, en, index, count) => h('button', {
-      key, type: 'button', 'aria-pressed': sectionView === key,
-      title: key === 'active' ? text('只显示活跃会话区', 'Show active section only') : key === 'inactive' ? text('只显示非活跃会话区', 'Show inactive section only') : text('显示两个会话区', 'Show both sections'),
+      key, type: 'button', 'aria-label': text(zh, en), 'aria-pressed': sectionView === key,
+      'data-dsl-tip': key === 'active' ? text('只显示活跃会话区', 'Show active section only') : key === 'inactive' ? text('只显示非活跃会话区', 'Show inactive section only') : text('显示两个会话区', 'Show both sections'),
       onClick: () => onConfigChange({ sectionView: key }),
       style: { ...buttonStyle, fontSize: 11, padding: '4px 6px', border: '1px solid var(--dsw-alias-border-l2)', borderRadius: index === 0 ? 'var(--dsw-radius-md) 0 0 var(--dsw-radius-md)' : index === count - 1 ? '0 var(--dsw-radius-md) var(--dsw-radius-md) 0' : 0, marginLeft: index ? -1 : 0, background: sectionView === key ? 'var(--dsw-alias-interactive-bg-hover)' : 'transparent', flex: 1, minWidth: 0, textAlign: 'center', whiteSpace: 'nowrap' },
-    }, text(zh, en));
+    }, icon(key, text(zh, en)));
     // A single-section view renders only that section (no empty placeholder for
     // the other one); "全部" renders both, split by the dashed divider.
     const showActive = sectionView !== 'inactive';
@@ -249,14 +243,15 @@ export function installSidebar(ctx, React, { openLibrary, useConfig, useFolders,
         onConfigChange ? h('span', { role: 'group', 'aria-label': text('会话分区', 'Session sections'), style: { display: 'inline-flex', flex: 1, minWidth: 0, gap: 4, alignItems: 'center' } },
           h('span', { style: { display: 'inline-flex', flex: 1, minWidth: 0 } },
             segment('active', '活跃', 'Active', 0, 3), segment('inactive', '非活跃', 'Inactive', 1, 3), segment('all', '全部', 'All', 2, 3)),
-          h('button', { type: 'button', 'aria-label': text('切换分组视图', 'Toggle grouping'), 'aria-pressed': grouping !== 'recent', title: text('按项目/文件夹分组', 'Group by project or folder'), onClick: () => onConfigChange({ sidebarGrouping: grouping === 'recent' ? 'folders' : 'recent' }), style: { ...buttonStyle, display: 'flex', padding: 5, flex: 'none', border: '1px solid var(--dsw-alias-border-l2)', background: grouping !== 'recent' ? 'var(--dsw-alias-interactive-bg-hover)' : 'transparent' } }, icon('folder', text('按项目/文件夹分组', 'Group by project or folder'))))
+          h('button', { type: 'button', 'aria-label': text('切换分组视图', 'Toggle grouping'), 'aria-pressed': grouping !== 'recent', 'data-dsl-tip': text('按项目/文件夹分组', 'Group by project or folder'), onClick: () => onConfigChange({ sidebarGrouping: grouping === 'recent' ? 'folders' : 'recent' }), style: { ...buttonStyle, display: 'flex', padding: 5, flex: 'none', border: '1px solid var(--dsw-alias-border-l2)', background: grouping !== 'recent' ? 'var(--dsw-alias-interactive-bg-hover)' : 'transparent' } }, icon('folder', text('按项目/文件夹分组', 'Group by project or folder'))))
           : h('span', { style: { color: 'var(--dsw-alias-label-tertiary)', fontSize: 12, flex: 1, minWidth: 0 } }, grouping === 'recent' ? text('最近会话', 'Recent sessions') : text('文件夹与项目', 'Folders and projects')),
-        folderActions.create && h('button', { type: 'button', 'aria-label': '新建文件夹', title: '新建文件夹', onClick: () => folderActions.create(), style: { ...buttonStyle, display: 'flex', padding: 5, flex: 'none' } }, icon('folder', '新建文件夹')),
-        h('button', { type: 'button', 'aria-label': '添加工作区', title: '添加工作区…（选择一个目录作为项目）', disabled: busy, onClick: () => void addWorkspace(), style: { ...buttonStyle, display: 'flex', padding: 5, flex: 'none' } }, icon('plus', '添加工作区')),
-        h('button', { type: 'button', 'aria-label': '新会话', title: '新会话（继承当前工作区）', disabled: busy, onClick: () => void startSession(undefined), style: { ...buttonStyle, display: 'flex', padding: 5, flex: 'none' } }, icon('chat', '新会话')),
-        h('button', { type: 'button', 'aria-label': '全部会话', title: '全部会话（完整浏览、搜索和归档管理）', onClick: () => openLibrary(), style: { ...buttonStyle, display: 'flex', padding: 5, flex: 'none' } }, icon('library', '全部会话'))),
+        folderActions.create && h('button', { type: 'button', 'aria-label': '新建文件夹', 'data-dsl-tip': '新建文件夹', onClick: () => folderActions.create(), style: { ...buttonStyle, display: 'flex', padding: 5, flex: 'none' } }, icon('folder', '新建文件夹')),
+        h('button', { type: 'button', 'aria-label': '添加工作区', 'data-dsl-tip': '添加工作区…（选择一个目录作为项目）', disabled: busy, onClick: () => void addWorkspace(), style: { ...buttonStyle, display: 'flex', padding: 5, flex: 'none' } }, icon('plus', '添加工作区')),
+        h('button', { type: 'button', 'aria-label': '新会话', 'data-dsl-tip': '新会话（继承当前工作区）', disabled: busy, onClick: () => void startSession(undefined), style: { ...buttonStyle, display: 'flex', padding: 5, flex: 'none' } }, icon('chat', '新会话')),
+        h('button', { type: 'button', 'aria-label': '全部会话', 'data-dsl-tip': '全部会话（完整浏览、搜索和归档管理）', onClick: () => openLibrary(), style: { ...buttonStyle, display: 'flex', padding: 5, flex: 'none' } }, icon('library', '全部会话'))),
       h('div', { style: { padding: '0 4px 8px' } },
         h('input', { type: 'search', 'aria-label': '搜索会话名称', placeholder: text('搜索会话名称', 'Search session names'), value: filter, maxLength: 500, onChange: event => setFilter(event.target.value), style: { font: 'inherit', fontSize: 12, width: '100%', minWidth: 0, minHeight: 30, color: 'var(--dsw-alias-label-primary)', background: 'transparent', border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 'var(--dsw-radius-md)', padding: '4px 8px', boxSizing: 'border-box' } })),
+      pickingDirectory && h(DirectoryPicker, { navigation: directoryNavigation, language: ctx.locale?.getSnapshot?.().active, onCancel: () => setPickingDirectory(false), onSelect: async path => { await ctx.workspaces.create({ path }); setPickingDirectory(false); } }),
       (error || folders.error) && h('div', { role: 'alert', style: { padding: 8, fontSize: 12 } }, error || String(folders.error)),
       pendingWorkspace && h('form', { 'data-dsl-workspace-editor': '', role: 'region', 'aria-label': pendingWorkspace.action === 'rename' ? '重命名工作区' : '删除工作区', onSubmit: event => { event.preventDefault(); void applyWorkspace(pendingWorkspace.action); }, style: { margin: '4px 4px 8px', padding: 8, border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 'var(--dsw-radius-md)', fontSize: 12, display: 'flex', flexDirection: 'column', gap: 6 } },
         h('strong', null, pendingWorkspace.action === 'rename' ? text('重命名工作区', 'Rename workspace') : text('删除工作区？', 'Delete workspace?')),

@@ -36,8 +36,8 @@ export function normalizeSectionState(value) {
  * Reconcile the frozen orders with the current catalog. Existing rows never
  * move; genuinely new ids are prepended (newest activity first). On a fresh
  * browser the whole catalog is seeded as lastActivity desc, then partitioned:
- * everything inside the inactivity window stays active, plus the newest
- * MIN_ACTIVE_COUNT rows as a floor. Pinned ids stay in the orders so pin/unpin
+ * everything inside the inactivity window stays active, without padding.
+ * Only the Active-only view borrows rows to show eight. Pinned ids stay in the orders so pin/unpin
  * never changes a row's frozen position; selectSections renders them apart.
  */
 export function reconcileSections(state, catalogIds, { now = Date.now(), activityOf = () => 0, threshold = INACTIVITY_THRESHOLD, minActiveCount = MIN_ACTIVE_COUNT, pinnedIds = [], blankIds = [] } = {}) {
@@ -69,11 +69,9 @@ export function reconcileSections(state, catalogIds, { now = Date.now(), activit
   }
   fresh.sort((a, b) => Number(blanks.has(b)) - Number(blanks.has(a)) || (lastActivity[b] - lastActivity[a]) || a.localeCompare(b));
   if (present.size === 0) {
-    let ordinaryActiveCount = 0;
     for (const id of fresh) {
-      if (protectedIds.has(id) || ordinaryActiveCount < minActiveCount || now - lastActivity[id] <= threshold) {
+      if (protectedIds.has(id) || now - lastActivity[id] <= threshold) {
         activeOrder.push(id);
-        if (!protectedIds.has(id)) ordinaryActiveCount++;
       } else inactiveOrder.push(id);
     }
   } else {
@@ -151,6 +149,13 @@ export function selectSections(state, { view = 'all', limit = 30, pinnedIds = []
   const budget = Math.max(0, max - pinned.size);
   const activeRows = (mode === 'inactive' ? [] : state.activeOrder).filter(id => !pinned.has(id));
   const inactiveRows = (mode === 'active' ? [] : state.inactiveOrder).filter(id => !pinned.has(id));
+  // Active-only is a useful minimum-eight window; All shows true membership.
+  // Borrow rows for display only, never move them between the persisted orders.
+  if (mode === 'active' && activeRows.length < MIN_ACTIVE_COUNT) {
+    const candidates = state.inactiveOrder.filter(id => !pinned.has(id));
+    if (state.lastActivity) candidates.sort((a, b) => (state.lastActivity[b] ?? 0) - (state.lastActivity[a] ?? 0));
+    activeRows.push(...candidates.slice(0, MIN_ACTIVE_COUNT - activeRows.length));
+  }
   const activeIds = activeRows.slice(0, budget);
   const inactiveIds = inactiveRows.slice(0, Math.max(0, budget - activeIds.length));
   return {
