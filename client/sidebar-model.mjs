@@ -30,26 +30,8 @@ export function projectSidebarList(list, workspace, requestedLimit) {
   return { list: { ...list, ids, byId, projectionsBySession }, total: ordinary.length, recentCount: Math.min(limit, ordinary.length), retainedCount: Object.keys(byId).length };
 }
 
-/**
- * Rank tier for a session row. The list is deliberately split into bands:
- *   0 pinned — the user's durable choice, always on top
- *   1 genuinely active — running / needs approval / unread reply
- *   2 the session currently open — the boundary: last of the active band,
- *     first of the idle band
- *   3 idle sessions, ordered by the host's activity timestamp
- * A session opened just to read therefore moves to a *fixed* boundary slot,
- * never to the very top, and the set of rows never changes.
- */
-export function activityTier(row, pinned, statuses) {
-  if (pinned.has(row.id)) return 0;
-  const state = statuses?.get(row.id);
-  if (Boolean(state?.running ?? row.running) || state?.pendingInteraction || state?.completionUnread) return 1;
-  if ((row.retainedBy?.mainView ?? 0) > 0) return 2;
-  return 3;
-}
-
 /** Group only the bounded projection; counts use the full catalog, never log data. */
-export function groupSidebarRows(fullList, projected, workspace, folderState = {}, mode = 'folders', statuses = new Map()) {
+export function groupSidebarRows(fullList, projected, workspace, folderState = {}, mode = 'folders') {
   const folders = folderState.folders ?? [];
   const assignments = folderState.assignments ?? {};
   const projects = workspace.items ?? [];
@@ -84,10 +66,13 @@ export function groupSidebarRows(fullList, projected, workspace, folderState = {
   }
   const pinned = new Set(workspace.pinnedSessionIds ?? []);
   for (const row of Object.values(projected.byId)) ensure(descriptor(row)).rows.push(row);
-  // Tier order is the fixed band layout; inside a tier, the host's activity
-  // timestamp decides. Opening a session only moves it to the tier-2 boundary,
-  // so the top of the list never changes on a mere click.
-  for (const group of groups.values()) group.rows.sort((a, b) => activityTier(a, pinned, statuses) - activityTier(b, pinned, statuses) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0) || a.id.localeCompare(b.id));
+  // Pure durable order: the user's pin, then the host's activity timestamp.
+  // Nothing transient participates — not "currently open", not an unread
+  // green dot, not running, not pending approval. Opening a session to read
+  // it (or clearing its unread dot) is a pure read and must leave every row
+  // exactly where it was; a session with a fresh reply stays put even after
+  // you view it, because the conversation is still going to continue.
+  for (const group of groups.values()) group.rows.sort((a, b) => Number(pinned.has(b.id)) - Number(pinned.has(a.id)) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0) || a.id.localeCompare(b.id));
   return [...groups.values()].filter(group => group.rows.length || group.folderId || group.total);
 }
 

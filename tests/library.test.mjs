@@ -80,28 +80,32 @@ test('cwd path fallback groups unaccounted sessions into the matching workspace'
  assert.equal(withProjects.find(g=>g.key==='project:w1').total,2);
  assert.equal(groups.find(g=>g.key==='ungrouped').total,2);
 });
-test('active band, then the open session at the boundary, then idle by time',()=>{
- const ids=['idle-new','running-old','idle-old'];
+test('reading a session or clearing its unread dot never moves any row',()=>{
+ const ids=['new-idle','older-busy','oldest'];
  const sessions={ids,byId:{
-  'idle-new':{id:'idle-new',displayTitle:'新但空闲',cwd:'/w',updatedAt:300},
-  'running-old':{id:'running-old',displayTitle:'旧但运行中',cwd:'/w',updatedAt:100},
-  'idle-old':{id:'idle-old',displayTitle:'更旧且空闲',cwd:'/w',updatedAt:50},
+  'new-idle':{id:'new-idle',displayTitle:'最近空闲',cwd:'/w',updatedAt:300},
+  'older-busy':{id:'older-busy',displayTitle:'有绿点待查看',cwd:'/w',updatedAt:200},
+  'oldest':{id:'oldest',displayTitle:'最旧',cwd:'/w',updatedAt:100},
  }};
  const workspaces={items:[{workspaceId:'w1',title:'研究',path:'/w',sessionIds:[]}],archivedSessionIds:[],pinnedSessionIds:[]};
- const statuses=new Map([['running-old',{running:true}]]);
- const order=()=>groupSidebarRows(sessions,sessions,workspaces,{},'folders',statuses).find(g=>g.key==='project:w1').rows.map(r=>r.id);
- // tier 1 (running) first, then idle sessions by activity time.
- assert.deepEqual(order(),['running-old','idle-new','idle-old']);
- // Opening an idle session moves it to the fixed tier-2 boundary: below every
- // active session, above every idle one — never to the very top.
- sessions.byId['idle-old'].retainedBy={mainView:1};
- assert.deepEqual(order(),['running-old','idle-old','idle-new']);
- // Opening a different session swaps which row sits at the boundary, but the
- // band layout (and therefore the top of the list) stays put.
- sessions.byId['idle-old'].retainedBy={};
- sessions.byId['idle-new'].retainedBy={mainView:1};
- assert.deepEqual(order(),['running-old','idle-new','idle-old']);
- // A pin is the only thing that outranks the active band.
- workspaces.pinnedSessionIds=['idle-old'];
- assert.deepEqual(order(),['idle-old','running-old','idle-new']);
+ const order=()=>groupSidebarRows(sessions,sessions,workspaces,{},'folders').find(g=>g.key==='project:w1').rows.map(r=>r.id);
+ const baseline=['new-idle','older-busy','oldest'];
+ assert.deepEqual(order(),baseline);
+ // A session with an unread reply (green dot) is opened: it becomes current,
+ // the unread flag clears, running/pending statuses come and go. Nothing moves.
+ const statuses=new Map([['older-busy',{completionUnread:true}]]);
+ sessions.byId['older-busy'].retainedBy={mainView:1};
+ sessions.byId['older-busy'].running=true;
+ statuses.set('older-busy',{running:true,completionUnread:false});
+ assert.deepEqual(groupSidebarRows(sessions,sessions,workspaces,{},'folders',statuses).find(g=>g.key==='project:w1').rows.map(r=>r.id),baseline);
+ // Switching to read a different session changes nothing either.
+ sessions.byId['older-busy'].retainedBy={};
+ sessions.byId['oldest'].retainedBy={mainView:1};
+ assert.deepEqual(order(),baseline);
+ // Only a durable pin or a genuinely newer activity time may reorder rows.
+ workspaces.pinnedSessionIds=['oldest'];
+ assert.deepEqual(order(),['oldest','new-idle','older-busy']);
+ workspaces.pinnedSessionIds=[];
+ sessions.byId['oldest'].updatedAt=400;
+ assert.deepEqual(order(),['oldest','new-idle','older-busy']);
 });
