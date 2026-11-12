@@ -55,7 +55,7 @@ export function apply(ctx, config = {}) {
     archive: async sessionIds => {
       const results = []
       for (const sessionId of sessionIds) {
-        const result = await vaultArchiveSession(deps, { ...options, sessionId })
+        const result = await vaultArchiveSession(deps, options, sessionId)
         results.push(result)
       }
       const failures = results.filter(result => result?.ok !== true)
@@ -65,7 +65,7 @@ export function apply(ctx, config = {}) {
         : { ok: false, error: { code: failures[0]?.error?.code ?? 'vault-archive-failed', message: `${failures.length}/${results.length} 个会话未能移入历史库；其余保持不变。` }, value: { results } }
     },
     migrate: params => vaultMigrateSessions(deps, options, params),
-    restore: sessionId => vaultRestoreSession(deps, { ...options, sessionId }),
+    restore: sessionId => vaultRestoreSession(deps, options, sessionId),
   })
   for (const [path, handler] of [
     ['search', searchHandler], ['archive-search', archive.search], ['trash', handlers.trash],
