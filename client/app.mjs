@@ -243,6 +243,9 @@ export function installLibrary(ctx, React) {
         h('input', { type: 'range', min: 20, max: 90, step: 5, value: typeof value.sidebarSessionHeight === 'number' ? value.sidebarSessionHeight : 65, onChange: e => setConfig({ sidebarSessionHeight: +e.target.value }), 'aria-label': text('会话区高度百分比', 'Session area height percentage'), title: value.sidebarSessionHeight === 'auto' ? text('当前为自适应；拖动即改为固定百分比', 'Currently Auto; drag to set a fixed percentage') : '', style: { accentColor: 'var(--dsw-focus-ring-color,#4c78a8)' } }),
         h('span', { style: { minWidth: '3em', textAlign: 'center' } }, value.sidebarSessionHeight === 'auto' ? '—' : `${value.sidebarSessionHeight}%`),
         button(text('自适应', 'Auto'), () => setConfig({ sidebarSessionHeight: 'auto' }), { 'aria-pressed': value.sidebarSessionHeight === 'auto', style: { fontSize: 12, padding: '3px 8px' } })),
+      h('label', null, text('「设为不活跃」按钮平时的不透明度', 'Resting opacity of the Make inactive button'),
+        h('input', { type: 'range', min: 0, max: 100, step: 5, value: value.deactivateOpacity, onChange: e => setConfig({ deactivateOpacity: +e.target.value }), 'aria-label': text('不活跃按钮不透明度', 'Make inactive button opacity'), style: { accentColor: 'var(--dsw-focus-ring-color,#4c78a8)' } }),
+        h('span', { style: { minWidth: '3em', textAlign: 'center' } }, `${value.deactivateOpacity}%`)),
       h('label', null, text('管理页每页条数', 'Sessions per page'),
         h('select', { value: value.pageSize, onChange: e => setConfig({ pageSize: +e.target.value }) },
           ...[25, 50, 100].map(n => h('option', { key: n, value: n }, n)))),
@@ -573,6 +576,9 @@ export function installLibrary(ctx, React) {
     document.documentElement.style.setProperty('--dsl-session-area-h', `${desired}px`);
   };
   syncSidebarHeight();
+  const syncDeactivateOpacity = () => document.documentElement.style.setProperty('--dsl-deact-opacity', String(config.deactivateOpacity / 100));
+  syncDeactivateOpacity();
+  configListeners.add(syncDeactivateOpacity);
   configListeners.add(syncSidebarHeight);
   window.addEventListener('resize', syncSidebarHeight);
   // The sidebar section mounts long after this plugin applies (it waits on
@@ -651,6 +657,7 @@ const LIBRARY_CSS = `
 .dsl-tabs{display:flex;gap:6px;padding:12px 20px 0;flex:none}.dsl-tabs button{border-color:transparent}.dsl-tabs button[aria-pressed=true]{background:var(--dsw-alias-interactive-bg-hover,#eee);font-weight:600;border-color:var(--dsw-alias-border-l2,#ddd)}
 .dsl-tools{display:flex;align-items:center;gap:8px;padding:12px 20px;flex-wrap:wrap;flex:none}.dsl-tools>input{flex:1 1 240px;min-width:120px}.dsl-dialog input[type=search],.dsl-dialog select,.dsl-config select{font:inherit;font-size:13px;min-height:34px;border:1px solid var(--dsw-alias-border-l2,#ccc);border-radius:7px;padding:5px 9px;background:var(--dsw-alias-bg-base,#fff);color:inherit}.dsl-check{display:flex;align-items:center;gap:4px;font-size:13px;white-space:nowrap}.dsl-check input{margin:0}
 .dsl-results{flex:1;min-height:0;overflow:auto;padding:0 20px;overscroll-behavior:contain}.dsl-session-row{display:flex;align-items:center;gap:16px;padding:13px 0;border-bottom:1px solid var(--dsw-alias-border-l2,#ddd);min-width:0}.dsl-row-main{flex:1;min-width:0}.dsl-dialog .dsl-session-title{display:block;max-width:100%;text-align:left;border:0;padding:0;font-weight:500;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-height:24px}.dsl-session-row small{display:block;font-size:12px;color:var(--dsw-alias-label-secondary,#666);margin-top:3px}.dsl-row-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap;flex:none}.dsl-row-actions button{font-size:12px;padding:4px 7px}.dsl-dialog .dsl-danger{color:var(--dsw-alias-state-error-primary,#b33535)}.dsl-snippet{white-space:pre-wrap;overflow-wrap:anywhere;max-height:88px;overflow:auto;font-size:13px;margin:8px 0 0}
+.dsl-deact{opacity:var(--dsl-deact-opacity,.3)}[data-dsl-session-row]:hover .dsl-deact,.dsl-deact:focus-visible{opacity:1}
 .dsl-status-dot{width:6px;height:6px;border-radius:50%;display:inline-block;flex:none}
 .dsl-more-menu{display:flex;flex-direction:column;min-width:200px;padding:4px}
 .dsl-more-group{display:flex;flex-direction:column;margin-bottom:4px;border-bottom:1px solid var(--dsw-alias-border-l2,#ddd);padding-bottom:4px}

@@ -196,6 +196,7 @@ export function installSidebar(ctx, React, { openLibrary, useConfig, useFolders,
           h('span', { style: { overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis', minWidth: 0, flex: 1 } }, label),
           pinned.has(row.id) && icon('pin', '已置顶'),
           h('span', { 'data-dsl-status': '', style: { width: 16, height: 16, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flex: 'none' } }, dot)),
+        sectionActions?.deactivate && sections?.activeOrder?.includes(row.id) && !pinned.has(row.id) && h('button', { type: 'button', className: 'dsl-deact', 'aria-label': `将会话“${label}”设为不活跃`, 'data-dsl-tip': text('设为不活跃', 'Make inactive'), onClick: event => { event.stopPropagation(); sectionActions.deactivate(row.id); }, style: { ...buttonStyle, flex: 'none', padding: '6px 2px', display: 'inline-flex' } }, icon('inactive', '设为不活跃')),
         h('button', { type: 'button', 'aria-label': `会话“${label}”的操作`, onClick: event => menu(event, row), style: { ...buttonStyle, flex: 'none', padding: 6, display: 'inline-flex' } }, icon('more', '会话操作')));
     };
     const groupView = (group, section) => {
