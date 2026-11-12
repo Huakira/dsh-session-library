@@ -44,6 +44,31 @@ import { installSidebar } from '../client/sidebar.mjs';
   assert.ok(calls[0].includes('blank'));
  });
 
+test('section project groups render all thirty budgeted rows and collapse explicitly', () => {
+  let Component;
+  const values = []; let hook = 0;
+  const React = {
+    createElement: (type, props, ...children) => ({ type, props: props ?? {}, children }),
+    useMemo: fn => fn(), useDeferredValue: v => v, useRef: v => ({ current: v }), useEffect() {},
+    useState: initial => { const i = hook++; if (!(i in values)) values[i] = initial; return [values[i], next => { values[i] = typeof next === 'function' ? next(values[i]) : next; }]; },
+  };
+  const ids = Array.from({ length: 40 }, (_, i) => `s${i}`);
+  const list = { phase: 'ready', ids, byId: Object.fromEntries(ids.map(id => [id, { id, displayTitle: id }])) };
+  installSidebar({ slots: { inject: (_, cb) => cb(), register: (_, c) => { Component = c; } } }, React, {
+    openLibrary() {}, useConfig: () => ({ sidebarLimit: 30, groupLimit: 5, sidebarGrouping: 'folders', sectionView: 'all' }),
+    useSections: () => ({ activeOrder: ids.slice(0, 20), inactiveOrder: ids.slice(20) }),
+    sectionActions: { reconcile() {}, refresh() {}, activate() {} },
+  });
+  const props = { wide: true, useSessions: fn => fn(list), useWorkspaces: fn => fn({}), useSessionStatus: fn => fn(new Map()) };
+  const render = () => {
+    hook = 0; const all = []; const visit = n => { if (!n || typeof n !== 'object') return; all.push(n); for (const c of n.children ?? []) Array.isArray(c) ? c.forEach(visit) : visit(c); }; visit(Component(props)); return all;
+  };
+  let all = render();
+  assert.equal(all.filter(n => n.props['data-dsl-session-row']).length, 30);
+  all.find(n => n.type === 'button' && n.props['aria-label']?.startsWith('收起')).props.onClick();
+  assert.equal(render().filter(n => n.props['data-dsl-session-row']).length, 10);
+});
+
 test('three thousand catalog rows create only thirty recent row components and navigation uses public service', () => {
   let Component;
   let selected;

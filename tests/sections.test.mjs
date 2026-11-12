@@ -126,6 +126,29 @@ test('a demotion beat keeps the newest floor plus everything still inside the wi
   assert.strictEqual(runDemotions(small, { now: NOW, threshold: THRESHOLD, minActiveCount: FLOOR }), small);
 });
 
+test('blank and pinned rows survive initial seeding and catch-up without consuming the active floor', () => {
+  const ids = ['a','b','c','pin','blank'];
+  const options = { now: 10000, threshold: 1, minActiveCount: 2, pinnedIds: ['pin'], blankIds: ['blank'] };
+  const seeded = reconcileSections(emptySectionState(), ids, { ...options, activityOf: id => ({ a: 5, b: 4, c: 3 }[id] ?? 0) });
+  assert.deepEqual(seeded.activeOrder, ['blank','a','b','pin']);
+  assert.deepEqual(runDemotions(seeded, options).activeOrder, seeded.activeOrder);
+  const old = { lastActivity: seeded.lastActivity, activeOrder: ['a','b'], inactiveOrder: ['blank','pin','c'] };
+  const recovered = reconcileSections(old, ids, options);
+  assert.deepEqual(recovered.activeOrder, ['blank','pin','a','b']);
+  assert.deepEqual(recovered.inactiveOrder, ['c']);
+  assert.strictEqual(reconcileSections(recovered, ids, options), recovered);
+});
+
+test('pin order follows activation order instead of catalog order', () => {
+  const state = { lastActivity: {}, activeOrder: ['b','a','c'], inactiveOrder: [] };
+  assert.deepEqual(selectSections(state, { pinnedIds: ['a','b'] }).pinnedIds, ['b','a']);
+});
+
+test('replayed activation cannot move the activity clock backwards', () => {
+  const state = { lastActivity: { a: 100 }, activeOrder: ['a'], inactiveOrder: [] };
+  assert.equal(activateSession(state, 'a', 10).lastActivity.a, 100);
+});
+
 test('pinned sessions never demote or consume the ordinary active floor', () => {
   const state = { lastActivity: { pin: 1, a: 5, b: 4, c: 3 }, activeOrder: ['pin','a','b','c'], inactiveOrder: [] };
   const next = runDemotions(state, { now: 100, threshold: 1, minActiveCount: 2, pinnedIds: ['pin'] });

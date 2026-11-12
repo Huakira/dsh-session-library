@@ -40,7 +40,9 @@ export function normalizeSectionState(value) {
  * MIN_ACTIVE_COUNT rows as a floor. Pinned ids stay in the orders so pin/unpin
  * never changes a row's frozen position; selectSections renders them apart.
  */
-export function reconcileSections(state, catalogIds, { now = Date.now(), activityOf = () => 0, threshold = INACTIVITY_THRESHOLD, minActiveCount = MIN_ACTIVE_COUNT } = {}) {
+export function reconcileSections(state, catalogIds, { now = Date.now(), activityOf = () => 0, threshold = INACTIVITY_THRESHOLD, minActiveCount = MIN_ACTIVE_COUNT, pinnedIds = [], blankIds = [] } = {}) {
+  const protectedIds = new Set([...pinnedIds, ...blankIds]);
+  const blanks = new Set(blankIds);
   const ids = [...new Set((Array.isArray(catalogIds) ? catalogIds : []).filter(id => typeof id === 'string'))];
   const known = new Set(ids);
   let needsNewActivity = Object.keys(state.lastActivity).length !== ids.length;
@@ -55,6 +57,9 @@ export function reconcileSections(state, catalogIds, { now = Date.now(), activit
   }
   let activeOrder = state.activeOrder.filter(id => known.has(id));
   const activeSet = new Set(activeOrder);
+  const recovered = state.inactiveOrder.filter(id => known.has(id) && protectedIds.has(id) && !activeSet.has(id));
+  if (recovered.length) activeOrder = [...recovered, ...activeOrder];
+  for (const id of recovered) activeSet.add(id);
   let inactiveOrder = state.inactiveOrder.filter(id => known.has(id) && !activeSet.has(id));
   const present = new Set([...activeOrder, ...inactiveOrder]);
   const fresh = ids.filter(id => !present.has(id));
@@ -62,11 +67,14 @@ export function reconcileSections(state, catalogIds, { now = Date.now(), activit
     if (lastActivity === state.lastActivity && activeOrder.length === state.activeOrder.length && inactiveOrder.length === state.inactiveOrder.length) return state;
     return { lastActivity, activeOrder, inactiveOrder };
   }
-  fresh.sort((a, b) => (lastActivity[b] - lastActivity[a]) || a.localeCompare(b));
+  fresh.sort((a, b) => Number(blanks.has(b)) - Number(blanks.has(a)) || (lastActivity[b] - lastActivity[a]) || a.localeCompare(b));
   if (present.size === 0) {
+    let ordinaryActiveCount = 0;
     for (const id of fresh) {
-      if (activeOrder.length < minActiveCount || now - lastActivity[id] <= threshold) activeOrder.push(id);
-      else inactiveOrder.push(id);
+      if (protectedIds.has(id) || ordinaryActiveCount < minActiveCount || now - lastActivity[id] <= threshold) {
+        activeOrder.push(id);
+        if (!protectedIds.has(id)) ordinaryActiveCount++;
+      } else inactiveOrder.push(id);
     }
   } else {
     activeOrder = [...fresh, ...activeOrder];
@@ -78,7 +86,7 @@ export function reconcileSections(state, catalogIds, { now = Date.now(), activit
 export function activateSession(state, sessionId, now = Date.now()) {
   if (typeof sessionId !== 'string') return state;
   return {
-    lastActivity: { ...state.lastActivity, [sessionId]: now },
+    lastActivity: { ...state.lastActivity, [sessionId]: Math.max(state.lastActivity[sessionId] ?? 0, now) },
     activeOrder: [sessionId, ...state.activeOrder.filter(id => id !== sessionId)],
     inactiveOrder: state.inactiveOrder.filter(id => id !== sessionId),
   };
@@ -109,8 +117,8 @@ export function removeSession(state, sessionId) {
  * activity first). Running rows are refreshed by the caller before this runs,
  * so a long tool run is never demoted mid-flight. No other row moves.
  */
-export function runDemotions(state, { now = Date.now(), threshold = INACTIVITY_THRESHOLD, minActiveCount = MIN_ACTIVE_COUNT, pinnedIds = [] } = {}) {
-  const pinned = new Set(pinnedIds);
+export function runDemotions(state, { now = Date.now(), threshold = INACTIVITY_THRESHOLD, minActiveCount = MIN_ACTIVE_COUNT, pinnedIds = [], blankIds = [] } = {}) {
+  const pinned = new Set([...pinnedIds, ...blankIds]);
   const eligible = state.activeOrder.filter(id => !pinned.has(id));
   if (eligible.length <= minActiveCount) return state;
   const lastActivity = state.lastActivity;
@@ -148,7 +156,7 @@ export function selectSections(state, { view = 'all', limit = 30, pinnedIds = []
   return {
     activeIds,
     inactiveIds,
-    pinnedIds: [...pinned],
+    pinnedIds: [...new Set([...state.activeOrder, ...state.inactiveOrder, ...pinned])].filter(id => pinned.has(id)),
     showDivider: mode === 'all' && activeIds.length > 0 && inactiveIds.length > 0,
   };
 }

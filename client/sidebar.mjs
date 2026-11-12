@@ -57,7 +57,7 @@ export function installSidebar(ctx, React, { openLibrary, useConfig, useFolders,
     React.useEffect(() => {
       if (!sectionActions || list.phase !== 'ready') return;
       sectionActions.setRunning?.([...((statuses instanceof Map) ? statuses : [])].filter(([, status]) => status.running).map(([id]) => id));
-      sectionActions.reconcile(eligible.ids, id => list.byId?.[id]?.updatedAt ?? list.byId?.[id]?.createdAt ?? 0, eligible.pinnedIds);
+      sectionActions.reconcile(eligible.ids, id => list.byId?.[id]?.updatedAt ?? list.byId?.[id]?.createdAt ?? 0, eligible.pinnedIds, eligible.ids.filter(id => list.byId?.[id]?.blank));
     }, [eligible, sectionActions, list.phase]);
 
     // Q5: running / tool output / green dot / amber dot / viewing a reply all
@@ -97,7 +97,9 @@ export function installSidebar(ctx, React, { openLibrary, useConfig, useFolders,
         if (needle) built = built.map(group => ({ ...group, rows: group.rows.filter(matchRow), total: group.rows.filter(matchRow).length })).filter(group => group.rows.length > 0);
         return built;
       };
-      return { ...picked, activeGroups: build(picked.activeIds), inactiveGroups: build(picked.inactiveIds), pinnedRows: picked.pinnedIds.map(id => list.byId?.[id]).filter(Boolean) };
+      const activeGroups = build(picked.activeIds);
+      const inactiveGroups = build(picked.inactiveIds);
+      return { ...picked, activeGroups, inactiveGroups, showDivider: sectionView === 'all' && activeGroups.length > 0 && inactiveGroups.length > 0, pinnedRows: picked.pinnedIds.map(id => list.byId?.[id]).filter(row => row && (!needle || matchRow(row))) };
     }, [sections, sectionView, config?.sidebarLimit, eligible, list.byId, workspace, folders, grouping, needle]);
     const legacyGroups = React.useMemo(() => {
       if (sections) return null;
@@ -176,7 +178,7 @@ export function installSidebar(ctx, React, { openLibrary, useConfig, useFolders,
       // "未分组" in the active section would collapse it in the inactive one too.
       const gk = section ? `${section}:${group.key}` : group.key;
       const expanded = expansion[gk] !== false;
-      const rows = needle || grouping === 'recent' ? group.rows : visibleSidebarGroupRows(group, expanded, config?.groupLimit, pinned);
+      const rows = section ? (expanded ? group.rows : []) : needle || grouping === 'recent' ? group.rows : visibleSidebarGroupRows(group, expanded, config?.groupLimit, pinned);
       const filter = { ...(group.workspaceId ? { workspaceId: group.workspaceId } : {}), ...(group.folderId ? { folderId: group.folderId } : {}), ...(group.ungrouped ? { ungrouped: true } : {}) };
       if (grouping === 'recent') return h('div', { key: gk }, ...rows.map(rowView));
       return h('div', { key: gk, 'data-dsl-group': group.key, style: { paddingBottom: 6 } },

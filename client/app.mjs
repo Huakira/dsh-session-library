@@ -127,16 +127,18 @@ export function installLibrary(ctx, React) {
   const quietSections = next => { sectionState = next; scheduleSectionPersist(); };
   let caughtUp = false;
   let sectionPinnedIds = [];
+  let sectionBlankIds = [];
   const sectionActions = {
-    reconcile: (ids, activityOf, pinnedIds = []) => {
+    reconcile: (ids, activityOf, pinnedIds = [], blankIds = []) => {
       sectionPinnedIds = pinnedIds;
+      sectionBlankIds = blankIds;
       const now = Date.now();
-      let next = reconcileSections(sectionState, ids, { now, activityOf });
+      let next = reconcileSections(sectionState, ids, { now, activityOf, pinnedIds, blankIds });
       // One catch-up beat per page load: sessions that aged out while the tab
       // was closed should not sit in the active section for a whole minute.
       if (!caughtUp) {
         caughtUp = true;
-        const checked = runDemotions(next, { now, pinnedIds: sectionPinnedIds });
+        const checked = runDemotions(next, { now, pinnedIds: sectionPinnedIds, blankIds: sectionBlankIds });
         if (checked !== next) next = checked;
       }
       if (next === sectionState) return;
@@ -162,7 +164,7 @@ export function installLibrary(ctx, React) {
       // emitted only for user/message events from the user.
       ctx.remote?.$on?.('api-session/activity', (sessionId, updatedAt) => {
         const at = Number(updatedAt);
-        publishSections(activateSession(sectionState, sessionId, Number.isFinite(at) && at > 0 ? at : Date.now()));
+        publishSections(activateSession(sectionState, sessionId, Number.isFinite(at) && at > 0 ? Math.max(Date.now(), at) : Date.now()));
       }),
       ctx.remote?.$on?.('api-session/status', (sessionId, running) => {
         if (running) runningIds.add(sessionId); else runningIds.delete(sessionId);
@@ -186,7 +188,7 @@ export function installLibrary(ctx, React) {
     // refreshing its clock every beat instead of demoting it mid-flight.
     let next = sectionState;
     for (const id of runningIds) next = refreshSession(next, id, now);
-    const demoted = runDemotions(next, { now, pinnedIds: sectionPinnedIds });
+    const demoted = runDemotions(next, { now, pinnedIds: sectionPinnedIds, blankIds: sectionBlankIds });
     if (demoted !== next) publishSections(demoted);
     else if (next !== sectionState) quietSections(next);
   }, DEMOTE_INTERVAL);
