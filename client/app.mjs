@@ -630,6 +630,14 @@ export function installLibrary(ctx, React) {
       ];
     },
   }), 'session-library workspace menu');
+  // Entries without an icon sit flush left and look misaligned next to the
+  // official icon rows, so give ours matching 16px stroke icons.
+  const menuIcon = d => () => React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.7, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true, style: { flex: 'none' } }, React.createElement('path', { d }));
+  ctx.slots.inject('contextMenu.icon', function* () {
+    yield ctx.slots.register({ name: 'contextMenu.icon', key: 'session-library.deactivate' }, menuIcon('M20 15a9 9 0 0 1-11-11 9 9 0 1 0 11 11Z'));
+    yield ctx.slots.register({ name: 'contextMenu.icon', key: 'session-library.trash' }, menuIcon('M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3'));
+    yield ctx.slots.register({ name: 'contextMenu.icon', key: 'session-library.manage' }, menuIcon('M4 6h16M4 12h16M4 18h10'));
+  });
   ctx.effect(() => ctx.contextMenus.register({
     id: 'dsh-session-library.manage', target: 'session', order: 490,
     observe: () => [ctx.workspaces.list, ctx.locale],
@@ -638,9 +646,9 @@ export function installLibrary(ctx, React) {
       const row = { id: sessionId, title: displayTitle || sessionId, archived };
       const pinned = ctx.workspaces.list.getSnapshot().pinnedSessionIds?.includes(sessionId);
       return [
-        ...(sectionActions.isActive(sessionId) && !pinned ? [{ id: 'deactivate', label: text('设为不活跃', 'Make inactive'), run: () => sectionActions.deactivate(sessionId) }] : []),
-        { id: 'library', label: text('在会话库中管理', 'Manage in session library'), run: () => openLibrary({ kind: 'manage', row }) },
-        { id: 'trash', label: text('移到回收站', 'Move to trash'), danger: true, afterContent: true, run: () => openLibrary({ kind: 'trash', row }) },
+        ...(sectionActions.isActive(sessionId) && !pinned ? [{ id: 'deactivate', label: text('设为不活跃', 'Make inactive'), icon: { key: 'session-library.deactivate' }, run: () => sectionActions.deactivate(sessionId) }] : []),
+        { id: 'library', label: text('在会话库中管理', 'Manage in session library'), icon: { key: 'session-library.manage' }, run: () => openLibrary({ kind: 'manage', row }) },
+        { id: 'trash', label: text('移到回收站', 'Move to trash'), icon: { key: 'session-library.trash' }, danger: true, afterContent: true, run: () => openLibrary({ kind: 'trash', row }) },
       ];
     },
   }), 'session-library context menu');
