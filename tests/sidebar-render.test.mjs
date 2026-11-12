@@ -108,18 +108,23 @@ test('startup cache renders navigable active rows during loading and yields comp
   assert.equal(writeActiveCache(storage, { list: { phase: 'ready', ids: ['cached'], byId: { cached: { id: 'cached', displayTitle: 'Cached title', cwd: '/project' } } }, workspace, sections }), true);
   let Component;
   let opened;
-  const React = { createElement: (type, props, ...children) => ({ type, props: props ?? {}, children }), useMemo: fn => fn(), useState: initial => [initial, () => {}], useDeferredValue: value => value, useEffect() {}, useRef: value => ({ current: value }), useSyncExternalStore: (_sub, get) => get() };
+  const React = { createElement: (type, props, ...children) => ({ type, props: props ?? {}, children }), useMemo: fn => fn(), useState: initial => [initial, () => {}], useDeferredValue: value => value, useEffect: fn => { effects.push(fn); }, useRef: value => { const i = refIndex++; return refs[i] ??= { current: value }; }, useSyncExternalStore: (_sub, get) => get() };
+  const refs = []; let refIndex = 0; let effects = [];
   installSidebar({ slots: { inject: (_, cb) => cb(), register: (_, component) => { Component = component; } }, get: () => ({ openSession: id => { opened = id; } }) }, React, { openLibrary() {}, useConfig: () => ({ sidebarGrouping: 'recent', sectionView: 'all' }), useSections: () => sections, sectionActions: {} });
   let live = { phase: 'loading', ids: [], byId: {} };
   const props = { wide: true, useSessions: select => select(live), useWorkspaces: select => select(workspace), useSessionStatus: select => select(new Map()) };
   const flatten = tree => { const nodes = []; const visit = node => { if (!node || typeof node !== 'object') return; nodes.push(node); for (const child of node.children ?? []) Array.isArray(child) ? child.forEach(visit) : visit(child); }; visit(tree); return nodes; };
+  refIndex = 0; effects = [];
   let nodes = flatten(Component(props));
   assert.equal(nodes.filter(node => node.props['data-dsl-session-row']).length, 1);
   assert.ok(nodes.some(node => node.props['data-dsl-cache-loading'] === ''));
   nodes.find(node => node.type === 'button' && node.props['aria-label'] === 'Cached title').props.onClick();
-  assert.equal(opened, 'cached');
+  assert.equal(opened, undefined); // host does not know cached sessions yet
   live = { phase: 'ready', ids: ['cached'], byId: { cached: { id: 'cached', displayTitle: 'Updated live title' } } };
+  refIndex = 0; effects = [];
   nodes = flatten(Component(props));
+  for (const run of effects) { try { run(); } catch { /* unrelated section effects need a full store */ } }
+  assert.equal(opened, 'cached'); // the deferred click opens once live data is ready
   assert.ok(nodes.some(node => node.props['aria-label'] === 'Updated live title'));
   assert.equal(nodes.some(node => node.props['data-dsl-cache-loading'] === ''), false);
   live = { phase: 'ready', ids: [], byId: {} };
