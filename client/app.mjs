@@ -2,6 +2,7 @@ import { normalizeConfig, libraryRows, paginateRows, groupedLibraryRows } from '
 import { installSidebar } from './sidebar.mjs';
 import { createFolderStore } from './folders.mjs';
 import { installListCoalesce } from './list-coalesce.mjs';
+import { emptySectionState, normalizeSectionState, reconcileSections, activateSession, refreshSession, removeSession, runDemotions, DEMOTE_INTERVAL } from './section-model.mjs';
 
 // Install at module scope (factory call), which precedes apply() and therefore
 // the boot-time session/list pair this coalesces.
@@ -95,6 +96,101 @@ export function installLibrary(ctx, React) {
     ];
     return () => { for (const dispose of off) dispose?.(); clearTimeout(outcomeTimer); outcomeTimer = 0; outcomePending.clear(); outcomeSettled.clear(); };
   }, 'session-library error marks');
+
+  // ── Active / Inactive session sections (spec v1) ─────────────────────────
+  // Frozen Order: a row only moves on activate or demote. The orders are kept
+  // in this browser's storage, so a plain refresh never reshuffles the list.
+  const SECTION_KEY = 'dsh-session-library.sections.v1';
+  let sectionState;
+  try { sectionState = normalizeSectionState(JSON.parse(localStorage.getItem(SECTION_KEY) || 'null')); } catch { sectionState = emptySectionState(); }
+  // React only re-renders when an ORDER changes. lastActivity ticks are silent:
+  // they feed the demotion clock, not the visible layout.
+  let sectionSnapshot = { activeOrder: sectionState.activeOrder, inactiveOrder: sectionState.inactiveOrder };
+  const sectionListeners = new Set();
+  const subscribeSections = fn => { sectionListeners.add(fn); return () => sectionListeners.delete(fn); };
+  const getSections = () => sectionSnapshot;
+  const useSections = () => React.useSyncExternalStore(subscribeSections, getSections, getSections);
+  let sectionPersistTimer = 0;
+  const scheduleSectionPersist = () => {
+    if (sectionPersistTimer) return;
+    sectionPersistTimer = setTimeout(() => {
+      sectionPersistTimer = 0;
+      try { localStorage.setItem(SECTION_KEY, JSON.stringify(sectionState)); } catch { /* private mode */ }
+    }, 800);
+  };
+  const publishSections = next => {
+    sectionState = next;
+    sectionSnapshot = { activeOrder: next.activeOrder, inactiveOrder: next.inactiveOrder };
+    scheduleSectionPersist();
+    for (const fn of sectionListeners) fn();
+  };
+  const quietSections = next => { sectionState = next; scheduleSectionPersist(); };
+  let caughtUp = false;
+  let sectionPinnedIds = [];
+  const sectionActions = {
+    reconcile: (ids, activityOf, pinnedIds = []) => {
+      sectionPinnedIds = pinnedIds;
+      const now = Date.now();
+      let next = reconcileSections(sectionState, ids, { now, activityOf });
+      // One catch-up beat per page load: sessions that aged out while the tab
+      // was closed should not sit in the active section for a whole minute.
+      if (!caughtUp) {
+        caughtUp = true;
+        const checked = runDemotions(next, { now, pinnedIds: sectionPinnedIds });
+        if (checked !== next) next = checked;
+      }
+      if (next === sectionState) return;
+      if (next.activeOrder === sectionState.activeOrder && next.inactiveOrder === sectionState.inactiveOrder) { quietSections(next); return; }
+      publishSections(next);
+    },
+    setRunning: ids => {
+      runningIds.clear();
+      for (const id of ids) runningIds.add(id);
+      const now = Date.now();
+      let next = sectionState;
+      for (const id of runningIds) next = refreshSession(next, id, now);
+      if (next !== sectionState) quietSections(next);
+    },
+    activate: sessionId => publishSections(activateSession(sectionState, sessionId, Date.now())),
+    refresh: sessionId => quietSections(refreshSession(sectionState, sessionId, Date.now())),
+    remove: sessionId => { const next = removeSession(sectionState, sessionId); if (next !== sectionState) publishSections(next); },
+  };
+  const runningIds = new Set();
+  ctx.effect(() => {
+    const off = [
+      // The exact "user sent a message" signal in the client protocol; it is
+      // emitted only for user/message events from the user.
+      ctx.remote?.$on?.('api-session/activity', (sessionId, updatedAt) => {
+        const at = Number(updatedAt);
+        publishSections(activateSession(sectionState, sessionId, Number.isFinite(at) && at > 0 ? at : Date.now()));
+      }),
+      ctx.remote?.$on?.('api-session/status', (sessionId, running) => {
+        if (running) runningIds.add(sessionId); else runningIds.delete(sessionId);
+        quietSections(refreshSession(sectionState, sessionId, Date.now()));
+      }),
+      ctx.remote?.$on?.('api-session/added', summary => {
+        const id = summary?.id ?? summary?.sessionId;
+        if (typeof id === 'string') quietSections(refreshSession(sectionState, id, Date.now()));
+      }),
+      ctx.remote?.$on?.('api-session/removed', sessionId => {
+        runningIds.delete(sessionId);
+        const next = removeSession(sectionState, sessionId);
+        if (next !== sectionState) publishSections(next);
+      }),
+    ];
+    return () => { for (const dispose of off) dispose?.(); };
+  }, 'session-library sections');
+  const sectionTimer = setInterval(() => {
+    const now = Date.now();
+    // No per-output remote event exists, so a long tool run is kept alive by
+    // refreshing its clock every beat instead of demoting it mid-flight.
+    let next = sectionState;
+    for (const id of runningIds) next = refreshSession(next, id, now);
+    const demoted = runDemotions(next, { now, pinnedIds: sectionPinnedIds });
+    if (demoted !== next) publishSections(demoted);
+    else if (next !== sectionState) quietSections(next);
+  }, DEMOTE_INTERVAL);
+
   let disposed = false;
   const controllers = new Set();
   async function request(path, body = {}, signal) {
@@ -122,7 +218,7 @@ export function installLibrary(ctx, React) {
       h('label', null, text('管理页每页条数', 'Sessions per page'),
         h('select', { value: value.pageSize, onChange: e => setConfig({ pageSize: +e.target.value }) },
           ...[25, 50, 100].map(n => h('option', { key: n, value: n }, n)))),
-      h('p', { className: 'dsl-hint' }, text('当前、置顶和有待处理活动的会话会额外保留。会话区高度按侧栏总高的百分比调整：低于自然高度时收窄会话区（列表内部滚动）；高于自然高度时把上方面板逐个折进「更多」菜单（始终保留插件入口），而不是压缩它。设置保存在此浏览器。', 'Current, pinned and attention-bearing sessions remain visible. The session-area height is a percentage of the sidebar: below the natural height the session area shrinks (the list scrolls inside); above it, panel rows fold into the "More" menu one by one (the Plugins entry always stays) instead of being squeezed. Settings are saved in this browser.')));
+      h('p', { className: 'dsl-hint' }, text('侧边栏顶部的「活跃 / 非活跃 / 全部」切换会话分区：15 分钟内有动作的会话留在活跃区（至少保留 8 个），其余按每分钟一次的节拍落到非活跃区顶部；发消息或置顶会把会话移到列表最顶部。区内顺序固定，只有激活和降级会移动会话，所以点开阅读或状态点变化都不会让列表跳动。置顶会话固定浮在最上方。会话区高度按侧栏总高的百分比调整：低于自然高度时收窄会话区（列表内部滚动）；高于自然高度时把上方面板逐个折进「更多」菜单（始终保留插件入口）。设置保存在此浏览器。', 'The Active / Inactive / All switch at the top of the sidebar controls the two sections: sessions with activity in the last 15 minutes stay Active (at least 8 are kept), the rest drift to the top of Inactive on a one-minute beat. Sending a message or pinning moves a session to the very top of the list. Order inside a section is frozen — only activation and demotion move a row, so reading a session or a status-dot change never reshuffles the list. Pinned sessions always float above both sections. The session-area height is a percentage of the sidebar: below the natural height the session area shrinks (the list scrolls inside); above it, panel rows fold into the "More" menu one by one (the Plugins entry always stays). Settings are saved in this browser.')));
   }
   function Settings() {
     return h('section', { className: 'dsl-settings' }, h('h2', null, text('会话库', 'Session library')), h(Configuration),
@@ -464,7 +560,10 @@ export function installLibrary(ctx, React) {
   window.addEventListener('storage', onStorage);
   ctx.slots.inject('shell.overlay', () => ctx.slots.register({ name: 'shell.overlay', id: 'dsh-session-library.overlay' }, Overlay));
   ctx.slots.inject('settings.section', () => ctx.slots.register({ name: 'settings.section', id: 'dsh-session-library.settings', order: 24, label: () => text('会话库', 'Session library') }, Settings));
-  installSidebar(ctx, React, { openLibrary, useConfig, onConfigChange: setConfig, workspaceRequest, useSessionErrors });
+  // The folder store is only refreshed when the library dialog opens; passing
+  // it to the sidebar would leave folders.loading=true forever and hide every
+  // row. Sections group by workspace (spec Q10), so no folder state is needed.
+  installSidebar(ctx, React, { openLibrary, useConfig, onConfigChange: setConfig, workspaceRequest, useSessionErrors, useSections, sectionActions });
   // The official sidebar "More" menu content is the sidebar.panellist.actions
   // LIST slot; the official entry-customization rows (browse/create plugins)
   // never render the panel entries the slot owner passes, so panels folded
@@ -508,7 +607,7 @@ export function installLibrary(ctx, React) {
       ];
     },
   }), 'session-library context menu');
-  ctx.effect(() => () => { disposed = true; style.remove(); heightStyle.remove(); window.removeEventListener('storage', onStorage); window.removeEventListener('resize', syncSidebarHeight); domObserver.disconnect(); clearTimeout(domSyncTimer); for (const controller of controllers) controller.abort(); controllers.clear(); configListeners.clear(); openListeners.clear(); errorListeners.clear(); }, 'session-library lifecycle');
+  ctx.effect(() => () => { disposed = true; style.remove(); heightStyle.remove(); window.removeEventListener('storage', onStorage); window.removeEventListener('resize', syncSidebarHeight); domObserver.disconnect(); clearTimeout(domSyncTimer); clearInterval(sectionTimer); clearTimeout(sectionPersistTimer); runningIds.clear(); sectionListeners.clear(); for (const controller of controllers) controller.abort(); controllers.clear(); configListeners.clear(); openListeners.clear(); errorListeners.clear(); }, 'session-library lifecycle');
   return { openLibrary };
 }
 

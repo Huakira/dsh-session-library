@@ -1,9 +1,10 @@
-import { projectSidebarList, groupSidebarRows, visibleSidebarGroupRows } from './sidebar-model.mjs';
+import { projectSidebarList, groupSidebarRows, groupSectionRows, visibleSidebarGroupRows, eligibleSidebarRows } from './sidebar-model.mjs';
+import { normalizeSectionView, selectSections, SECTION_GROUP_CAP } from './section-model.mjs';
 
 const SIDEBAR_SLOT = 'sidebar.workspaces';
 
 /** Replace only the public browsing region; dispose reveals the official region. */
-export function installSidebar(ctx, React, { openLibrary, useConfig, useFolders, folderActions = {}, onConfigChange, workspaceRequest, useSessionErrors }) {
+export function installSidebar(ctx, React, { openLibrary, useConfig, useFolders, folderActions = {}, onConfigChange, workspaceRequest, useSessionErrors, useSections, sectionActions }) {
   const h = React.createElement;
   const text = (zh, en) => ctx.locale?.getSnapshot?.().active === 'zh' ? zh : en;
   const buttonStyle = { cursor: 'pointer', color: 'var(--dsw-alias-label-primary)', background: 'transparent', border: 0, borderRadius: 'var(--dsw-radius-md)', padding: '7px 9px', font: 'inherit', textAlign: 'left' };
@@ -26,6 +27,8 @@ export function installSidebar(ctx, React, { openLibrary, useConfig, useFolders,
     const workspace = props.useWorkspaces(state => state);
     const statuses = props.useSessionStatus(state => state);
     const errored = (props.useSessionErrors ?? (() => new Set()))();
+    const sections = useSections ? useSections() : null;
+    const sectionView = normalizeSectionView(config?.sectionView);
     const [filter, setFilter] = React.useState('');
     // Typing stays immediate; grouping work defers so keystrokes never wait on it.
     const needle = React.useDeferredValue(filter.trim().toLocaleLowerCase());
@@ -47,15 +50,65 @@ export function installSidebar(ctx, React, { openLibrary, useConfig, useFolders,
     const pinned = React.useMemo(() => new Set(workspace.pinnedSessionIds ?? []), [workspace.pinnedSessionIds]);
     const archived = React.useMemo(() => new Set(workspace.archivedSessionIds ?? []), [workspace.archivedSessionIds]);
     const grouping = ['recent', 'projects', 'folders'].includes(config?.sidebarGrouping) ? config.sidebarGrouping : 'folders';
-    const groups = React.useMemo(() => {
+    const eligible = React.useMemo(() => eligibleSidebarRows(list, workspace, { includeBlank: !!sectionActions }), [list.ids, list.byId, workspace.pinnedSessionIds, workspace.archivedSessionIds]);
+
+    // Reconcile the frozen orders with the catalog. Idempotent: existing rows
+    // never move, only genuinely new ids are seeded (newest activity first).
+    React.useEffect(() => {
+      if (!sectionActions || list.phase !== 'ready') return;
+      sectionActions.setRunning?.([...((statuses instanceof Map) ? statuses : [])].filter(([, status]) => status.running).map(([id]) => id));
+      sectionActions.reconcile(eligible.ids, id => list.byId?.[id]?.updatedAt ?? list.byId?.[id]?.createdAt ?? 0, eligible.pinnedIds);
+    }, [eligible, sectionActions, list.phase]);
+
+    // Q5: running / tool output / green dot / amber dot / viewing a reply all
+    // refresh the demotion clock, but never move a row. There is no remote
+    // event for those, so diff the host's status snapshot instead.
+    const seenStatuses = React.useRef(null);
+    React.useEffect(() => {
+      const before = seenStatuses.current;
+      const current = new Map(statuses instanceof Map ? statuses : []);
+      seenStatuses.current = current;
+      sectionActions?.setRunning?.([...current].filter(([, status]) => status.running).map(([id]) => id));
+      if (!before || !sectionActions) return;
+      for (const [id, next] of current) {
+        const prev = before.get(id) ?? {};
+        if ((!prev.running && next.running) || (!prev.pendingInteraction && next.pendingInteraction) || (!prev.completionUnread && next.completionUnread) || (prev.completionUnread && !next.completionUnread)) sectionActions.refresh(id);
+      }
+    }, [statuses, sectionActions]);
+
+    // Q13: Pin is the second activating event (besides sending a message).
+    const seenPinned = React.useRef(null);
+    const pinnedKey = eligible.pinnedIds.join('|');
+    React.useEffect(() => {
+      const before = seenPinned.current;
+      const current = new Set(eligible.pinnedIds);
+      seenPinned.current = current;
+      if (!before || !sectionActions) return;
+      for (const id of current) if (!before.has(id)) sectionActions.activate(id);
+    }, [pinnedKey, sectionActions]);
+
+    const matchRow = row => ((row.displayTitle ?? row.title ?? '') + ' ' + row.id).toLocaleLowerCase().includes(needle);
+    const sectionData = React.useMemo(() => {
+      if (!sections) return null;
+      const picked = selectSections(sections, { view: sectionView, limit: config?.sidebarLimit, pinnedIds: eligible.pinnedIds });
+      const full = { ids: eligible.ids, byId: list.byId };
+      const build = ids => {
+        let built = groupSectionRows(ids, full, workspace, folders, grouping);
+        if (needle) built = built.map(group => ({ ...group, rows: group.rows.filter(matchRow), total: group.rows.filter(matchRow).length })).filter(group => group.rows.length > 0);
+        return built;
+      };
+      return { ...picked, activeGroups: build(picked.activeIds), inactiveGroups: build(picked.inactiveIds), pinnedRows: picked.pinnedIds.map(id => list.byId?.[id]).filter(Boolean) };
+    }, [sections, sectionView, config?.sidebarLimit, eligible, list.byId, workspace, folders, grouping, needle]);
+    const legacyGroups = React.useMemo(() => {
+      if (sections) return null;
       const base = groupSidebarRows(list, projection.list, workspace, folders, grouping);
       if (!needle) return base;
-      const match = row => ((row.displayTitle ?? row.title ?? '') + ' ' + row.id).toLocaleLowerCase().includes(needle);
-      return base.map(group => ({ ...group, rows: group.rows.filter(match), total: group.rows.filter(match).length })).filter(group => group.rows.length > 0);
-    }, [list, projection.list, workspace, folders, grouping, needle]);
+      return base.map(group => ({ ...group, rows: group.rows.filter(matchRow), total: group.rows.filter(matchRow).length })).filter(group => group.rows.length > 0);
+    }, [sections, list, projection.list, workspace, folders, grouping, needle]);
     const [error, setError] = React.useState('');
     const [busy, setBusy] = React.useState(false);
     const [expansion, setExpansion] = React.useState({});
+    const [moreSections, setMoreSections] = React.useState({});
     const open = row => {
       if (archived.has(row.id)) { openLibrary(); return; }
       try {
@@ -118,23 +171,39 @@ export function installSidebar(ctx, React, { openLibrary, useConfig, useFolders,
           h('span', { 'data-dsl-status': '', style: { width: 16, height: 16, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flex: 'none' } }, dot)),
         h('button', { type: 'button', 'aria-label': `会话“${label}”的操作`, onClick: event => menu(event, row), style: { ...buttonStyle, flex: 'none', padding: 6, display: 'inline-flex' } }, icon('more', '会话操作')));
     };
-    const groupView = group => {
-      const expanded = expansion[group.key] !== false;
+    const groupView = (group, section) => {
+      // A group key must be unique across the two sections; otherwise collapsing
+      // "未分组" in the active section would collapse it in the inactive one too.
+      const gk = section ? `${section}:${group.key}` : group.key;
+      const expanded = expansion[gk] !== false;
       const rows = needle || grouping === 'recent' ? group.rows : visibleSidebarGroupRows(group, expanded, config?.groupLimit, pinned);
       const filter = { ...(group.workspaceId ? { workspaceId: group.workspaceId } : {}), ...(group.folderId ? { folderId: group.folderId } : {}), ...(group.ungrouped ? { ungrouped: true } : {}) };
-      if (grouping === 'recent') return h('div', { key: group.key }, ...rows.map(rowView));
-      return h('div', { key: group.key, 'data-dsl-group': group.key, style: { paddingBottom: 6 } },
+      if (grouping === 'recent') return h('div', { key: gk }, ...rows.map(rowView));
+      return h('div', { key: gk, 'data-dsl-group': group.key, style: { paddingBottom: 6 } },
         h('div', { style: { display: 'flex', alignItems: 'center', minWidth: 0 } },
-          h('button', { type: 'button', 'aria-expanded': expanded, 'aria-label': `${expanded ? '收起' : '展开'}${group.name}`, onClick: () => setExpansion(previous => ({ ...previous, [group.key]: !expanded })), style: { ...buttonStyle, display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, flex: 1, color: 'var(--dsw-alias-label-secondary)', fontSize: 12 } },
+          h('button', { type: 'button', 'aria-expanded': expanded, 'aria-label': `${expanded ? '收起' : '展开'}${group.name}`, onClick: () => setExpansion(previous => ({ ...previous, [gk]: !expanded })), style: { ...buttonStyle, display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, flex: 1, color: 'var(--dsw-alias-label-secondary)', fontSize: 12 } },
             icon(expanded ? 'down' : 'right', expanded ? '收起' : '展开'), icon('folder', group.folderId ? '文件夹' : '项目'),
             h('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, flex: 1 } }, group.name),
             h('span', { style: { opacity: .65, flex: 'none' } }, String(group.total))),
-          !group.folderId && group.workspaceId && group.workspaceId !== '__ungrouped__' && h(WorkspaceGroupMenu, { key: `menu-${group.key}`, group }),
+          !group.folderId && group.workspaceId && group.workspaceId !== '__ungrouped__' && h(WorkspaceGroupMenu, { key: `menu-${gk}`, group }),
           group.folderId && folderActions.manage && h('button', { type: 'button', 'aria-label': `管理文件夹${group.name}`, onClick: () => folderActions.manage({ id: group.folderId, name: group.name }), style: { ...buttonStyle, padding: 6, display: 'flex' } }, icon('more', '管理文件夹')),
           !needle && h('button', { type: 'button', 'aria-label': `在${group.name}中新建会话`, title: `在“${group.name}”中新建会话`, disabled: busy, onClick: () => void startSession(group.workspaceId && group.workspaceId !== '__ungrouped__' ? group.workspaceId : undefined), style: { ...buttonStyle, padding: 6, display: 'flex' } }, icon('plus', '新会话'))),
         expanded && h('div', { style: { paddingLeft: 9 } }, ...rows.map(rowView),
           rows.length === 0 && h('div', { style: { padding: '5px 9px', fontSize: 12, color: 'var(--dsw-alias-label-tertiary)' } }, needle ? '此组没有匹配的会话' : group.total ? '此组暂无最近会话' : '空文件夹'),
-          (group.total > rows.length) && h('button', { type: 'button', onClick: () => openLibrary(needle ? { kind: 'query', query: needle, value: filter } : filter), style: { ...buttonStyle, fontSize: 12, color: 'var(--dsw-alias-label-secondary)' } }, needle ? `在会话库中搜索“${needle}”` : `查看全部 ${group.total} 条`)));
+          !section && (group.total > rows.length) && h('button', { type: 'button', onClick: () => openLibrary(needle ? { kind: 'query', query: needle, value: filter } : filter), style: { ...buttonStyle, fontSize: 12, color: 'var(--dsw-alias-label-secondary)' } }, needle ? `在会话库中搜索“${needle}”` : `查看全部 ${group.total} 条`),
+          section && (group.total > rows.length) && h('button', { type: 'button', onClick: () => openLibrary(needle ? { kind: 'query', query: needle, value: filter } : filter), style: { ...buttonStyle, fontSize: 12, color: 'var(--dsw-alias-label-secondary)' } }, text('在会话库中查看', 'Open in session library'))));
+    };
+    const sectionViewBlock = (section, groups) => {
+      const shown = groups.slice(0, SECTION_GROUP_CAP);
+      const hidden = groups.slice(SECTION_GROUP_CAP);
+      return h('div', { key: section, 'data-dsl-section': section, style: { minWidth: 0 } },
+        ...shown.map(group => groupView(group, section)),
+        hidden.length > 0 && (moreSections[section]
+          ? h('div', { key: `more-${section}` }, ...hidden.map(group => groupView(group, section)))
+          : h('button', { key: `more-${section}`, type: 'button', onClick: () => setMoreSections(previous => ({ ...previous, [section]: true })), style: { ...buttonStyle, fontSize: 12, color: 'var(--dsw-alias-label-secondary)' } }, text(`更多分组（${hidden.length}）`, `More groups (${hidden.length})`))),
+        groups.length === 0 && h('div', { style: { padding: 8, fontSize: 12, color: 'var(--dsw-alias-label-tertiary)' } }, needle
+          ? text('此区没有匹配的会话', 'No matching sessions in this section')
+          : section === 'active' ? text('暂无活跃会话', 'No active sessions') : text('暂无非活跃会话', 'No inactive sessions')));
     };
     if (!props.wide) return h('button', { type: 'button', title: '全部会话', 'aria-label': '全部会话', onClick: () => openLibrary(), style: { ...buttonStyle, display: 'flex', justifyContent: 'center' } }, icon('library', '全部会话'));
     const addWorkspace = async () => {
@@ -160,16 +229,30 @@ export function installSidebar(ctx, React, { openLibrary, useConfig, useFolders,
       } catch (reason) { setError(String(reason?.message ?? reason)); }
       finally { setBusy(false); }
     };
+    const segment = (key, zh, en, index, count) => h('button', {
+      key, type: 'button', 'aria-pressed': sectionView === key,
+      title: key === 'active' ? text('只显示活跃会话区', 'Show active section only') : key === 'inactive' ? text('只显示非活跃会话区', 'Show inactive section only') : text('显示两个会话区', 'Show both sections'),
+      onClick: () => onConfigChange({ sectionView: key }),
+      style: { ...buttonStyle, fontSize: 11, padding: '4px 6px', border: '1px solid var(--dsw-alias-border-l2)', borderRadius: index === 0 ? 'var(--dsw-radius-md) 0 0 var(--dsw-radius-md)' : index === count - 1 ? '0 var(--dsw-radius-md) var(--dsw-radius-md) 0' : 0, marginLeft: index ? -1 : 0, background: sectionView === key ? 'var(--dsw-alias-interactive-bg-hover)' : 'transparent', flex: 1, minWidth: 0, textAlign: 'center', whiteSpace: 'nowrap' },
+    }, text(zh, en));
+    // A single-section view renders only that section (no empty placeholder for
+    // the other one); "全部" renders both, split by the dashed divider.
+    const showActive = sectionView !== 'inactive';
+    const showInactive = sectionView !== 'active';
+    const visibleGroupCount = sectionData
+      ? (showActive ? sectionData.activeGroups.length : 0) + (showInactive ? sectionData.inactiveGroups.length : 0)
+      : legacyGroups.length;
     return h('section', { 'data-dsh-session-library-sidebar': '', 'aria-label': '会话分组', style: { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0, padding: '0 8px', maxHeight: 'var(--dsl-session-area-h, none)' } },
       h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 4px', gap: 6 } },
-        onConfigChange ? h('span', { role: 'group', 'aria-label': text('侧栏视图', 'Sidebar view'), style: { display: 'inline-flex', flex: 1, minWidth: 0 } },
-          h('button', { type: 'button', 'aria-pressed': grouping === 'recent', title: text('列表视图：最近的会话平铺显示', 'List view: recent sessions in a flat list'), onClick: () => onConfigChange({ sidebarGrouping: 'recent' }), style: { ...buttonStyle, fontSize: 12, padding: '4px 9px', border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 'var(--dsw-radius-md) 0 0 var(--dsw-radius-md)', background: grouping === 'recent' ? 'var(--dsw-alias-interactive-bg-hover)' : 'transparent' } }, text('列表', 'List')),
-          h('button', { type: 'button', 'aria-pressed': grouping !== 'recent', title: text('项目视图：按文件夹与工作区分组', 'Projects view: grouped by folders and workspaces'), onClick: () => onConfigChange({ sidebarGrouping: 'folders' }), style: { ...buttonStyle, fontSize: 12, padding: '4px 9px', border: '1px solid var(--dsw-alias-border-l2)', borderRadius: '0 var(--dsw-radius-md) var(--dsw-radius-md) 0', marginLeft: -1, background: grouping !== 'recent' ? 'var(--dsw-alias-interactive-bg-hover)' : 'transparent' } }, text('项目', 'Projects')))
+        onConfigChange ? h('span', { role: 'group', 'aria-label': text('会话分区', 'Session sections'), style: { display: 'inline-flex', flex: 1, minWidth: 0, gap: 4, alignItems: 'center' } },
+          h('span', { style: { display: 'inline-flex', flex: 1, minWidth: 0 } },
+            segment('active', '活跃', 'Active', 0, 3), segment('inactive', '非活跃', 'Inactive', 1, 3), segment('all', '全部', 'All', 2, 3)),
+          h('button', { type: 'button', 'aria-label': text('切换分组视图', 'Toggle grouping'), 'aria-pressed': grouping !== 'recent', title: text('按项目/文件夹分组', 'Group by project or folder'), onClick: () => onConfigChange({ sidebarGrouping: grouping === 'recent' ? 'folders' : 'recent' }), style: { ...buttonStyle, display: 'flex', padding: 5, flex: 'none', border: '1px solid var(--dsw-alias-border-l2)', background: grouping !== 'recent' ? 'var(--dsw-alias-interactive-bg-hover)' : 'transparent' } }, icon('folder', text('按项目/文件夹分组', 'Group by project or folder'))))
           : h('span', { style: { color: 'var(--dsw-alias-label-tertiary)', fontSize: 12, flex: 1, minWidth: 0 } }, grouping === 'recent' ? text('最近会话', 'Recent sessions') : text('文件夹与项目', 'Folders and projects')),
-        folderActions.create && h('button', { type: 'button', 'aria-label': '新建文件夹', title: '新建文件夹', onClick: () => folderActions.create(), style: { ...buttonStyle, display: 'flex', padding: 5 } }, icon('folder', '新建文件夹')),
-        h('button', { type: 'button', 'aria-label': '添加工作区', title: '添加工作区…（选择一个目录作为项目）', disabled: busy, onClick: () => void addWorkspace(), style: { ...buttonStyle, display: 'flex', padding: 5 } }, icon('plus', '添加工作区')),
-        h('button', { type: 'button', 'aria-label': '新会话', title: '新会话（继承当前工作区）', disabled: busy, onClick: () => void startSession(undefined), style: { ...buttonStyle, display: 'flex', padding: 5 } }, icon('chat', '新会话')),
-        h('button', { type: 'button', 'aria-label': '全部会话', title: '全部会话（完整浏览、搜索和归档管理）', onClick: () => openLibrary(), style: { ...buttonStyle, display: 'flex', padding: 5 } }, icon('library', '全部会话'))),
+        folderActions.create && h('button', { type: 'button', 'aria-label': '新建文件夹', title: '新建文件夹', onClick: () => folderActions.create(), style: { ...buttonStyle, display: 'flex', padding: 5, flex: 'none' } }, icon('folder', '新建文件夹')),
+        h('button', { type: 'button', 'aria-label': '添加工作区', title: '添加工作区…（选择一个目录作为项目）', disabled: busy, onClick: () => void addWorkspace(), style: { ...buttonStyle, display: 'flex', padding: 5, flex: 'none' } }, icon('plus', '添加工作区')),
+        h('button', { type: 'button', 'aria-label': '新会话', title: '新会话（继承当前工作区）', disabled: busy, onClick: () => void startSession(undefined), style: { ...buttonStyle, display: 'flex', padding: 5, flex: 'none' } }, icon('chat', '新会话')),
+        h('button', { type: 'button', 'aria-label': '全部会话', title: '全部会话（完整浏览、搜索和归档管理）', onClick: () => openLibrary(), style: { ...buttonStyle, display: 'flex', padding: 5, flex: 'none' } }, icon('library', '全部会话'))),
       h('div', { style: { padding: '0 4px 8px' } },
         h('input', { type: 'search', 'aria-label': '搜索会话名称', placeholder: text('搜索会话名称', 'Search session names'), value: filter, maxLength: 500, onChange: event => setFilter(event.target.value), style: { font: 'inherit', fontSize: 12, width: '100%', minWidth: 0, minHeight: 30, color: 'var(--dsw-alias-label-primary)', background: 'transparent', border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 'var(--dsw-radius-md)', padding: '4px 8px', boxSizing: 'border-box' } })),
       (error || folders.error) && h('div', { role: 'alert', style: { padding: 8, fontSize: 12 } }, error || String(folders.error)),
@@ -183,10 +266,15 @@ export function installSidebar(ctx, React, { openLibrary, useConfig, useFolders,
           h('button', { type: 'submit', disabled: busy, style: { ...buttonStyle, fontSize: 12, flex: 1, border: '1px solid var(--dsw-alias-border-l2)', textAlign: 'center' } }, busy ? text('保存中…', 'Saving…') : pendingWorkspace.action === 'rename' ? text('保存', 'Save') : text('确认删除', 'Delete')))),
       h('div', { style: { minHeight: 0, flex: 1, overflowY: 'auto' } },
         (list.phase !== 'ready' || folders.loading) && h('div', { role: 'status', style: { padding: 8 } }, '正在加载会话…'),
-        list.phase === 'ready' && groups.length === 0 && h('div', { style: { padding: 8, fontSize: 12 } }, needle ? [
+        list.phase === 'ready' && visibleGroupCount === 0 && h('div', { style: { padding: 8, fontSize: 12 } }, needle ? [
           text('没有匹配的最近会话。', 'No recent sessions match.'),
           h('button', { key: 'search-library', type: 'button', onClick: () => openLibrary({ kind: 'query', query: needle }), style: { ...buttonStyle, fontSize: 12, color: 'var(--dsw-alias-label-secondary)' } }, `在会话库中搜索“${needle}”`),
-        ] : '暂无最近会话'), ...groups.map(groupView)));
+        ] : '暂无最近会话'),
+        sectionData && sectionData.pinnedRows.length > 0 && h('div', { key: 'dsl-pinned', 'data-dsl-pinned': '', style: { paddingBottom: 4 } }, ...sectionData.pinnedRows.map(rowView)),
+        sectionData && showActive && sectionViewBlock('active', sectionData.activeGroups),
+        sectionData && sectionData.showDivider && h('div', { key: 'dsl-divider', 'data-dsl-section-divider': '', role: 'separator', style: { borderTop: '1px dashed var(--dsw-alias-border-l2)', margin: '6px 4px' } }),
+        sectionData && showInactive && sectionViewBlock('inactive', sectionData.inactiveGroups),
+        ...(legacyGroups ? legacyGroups.map(group => groupView(group)) : [])));
   }
   RecentSidebar.displayName = 'SessionLibraryRecentSidebar';
   return ctx.slots.inject(SIDEBAR_SLOT, () => ctx.slots.register({ name: SIDEBAR_SLOT, priority: -100 }, RecentSidebar));

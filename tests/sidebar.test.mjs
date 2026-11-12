@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { projectSidebarList, normalizeSidebarLimit, groupSidebarRows, visibleSidebarGroupRows } from '../client/sidebar-model.mjs';
+import { projectSidebarList, normalizeSidebarLimit, groupSidebarRows, groupSectionRows, visibleSidebarGroupRows, eligibleSidebarRows } from '../client/sidebar-model.mjs';
 import { installSidebar } from '../client/sidebar.mjs';
 
 function fixture(count = 100) {
@@ -114,4 +114,43 @@ test('group fold emits zero rows; reading never splices attention rows in', () =
   assert.equal(visible.length, 5);
   assert.equal(visible.some(row => row.id === 's000'), false);
   assert.equal(Object.keys(projection.list.byId).length, 31);
+});
+
+test('eligibleSidebarRows keeps the whole catalog but excludes blanks, subagents and archives', () => {
+  const list = fixture(12);
+  list.byId.s000.blank = true;
+  list.byId.s001.origin = 'subagent';
+  const workspace = { pinnedSessionIds: ['s002', 's000', 's009'], archivedSessionIds: ['s003', 's002'] };
+  const eligible = eligibleSidebarRows(list, workspace);
+  assert.equal(eligible.ids.length, 8); // 12 - blank - subagent - 2 archived
+  assert.equal(eligible.ids.includes('s000'), false);
+  assert.equal(eligible.ids.includes('s001'), false);
+  assert.equal(eligible.ids.includes('s003'), false);
+  assert.equal(eligible.ids.includes('s002'), false);
+  assert.deepEqual(eligible.pinnedIds, ['s009']); // pinned, and still eligible
+  assert.equal(eligible.byId, list.byId);
+});
+
+test('groupSectionRows preserves Frozen Order and never seeds empty folders', () => {
+  const list = fixture(10);
+  const workspace = { items: [{ workspaceId: 'p', title: 'Project', sessionIds: ['s000', 's001'] }] };
+  const folders = { folders: [{ id: 'f', name: 'Research' }, { id: 'empty', name: 'Empty' }], assignments: { s005: 'f' } };
+  // Deliberately not in updatedAt order: the section model owns the order.
+  const order = ['s005', 's000', 's007', 's001'];
+  const groups = groupSectionRows(order, list, workspace, folders, 'folders');
+  assert.deepEqual(groups.map(g => g.key), ['folder:f', 'project:p', 'ungrouped']);
+  assert.deepEqual(groups.find(g => g.folderId === 'f').rows.map(r => r.id), ['s005']);
+  assert.deepEqual(groups.find(g => g.workspaceId === 'p').rows.map(r => r.id), ['s000', 's001']);
+  assert.deepEqual(groups.find(g => g.ungrouped).rows.map(r => r.id), ['s007']);
+  for (const group of groups) assert.equal(group.total, group.rows.length);
+  // A folder with no rows in this section must not appear a second time.
+  assert.equal(groups.some(g => g.folderId === 'empty'), false);
+});
+
+test('groupSectionRows in recent mode keeps a single group in the given order', () => {
+  const list = fixture(6);
+  const groups = groupSectionRows(['s005', 's001', 's003'], list, {}, {}, 'recent');
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].key, 'recent');
+  assert.deepEqual(groups[0].rows.map(r => r.id), ['s005', 's001', 's003']);
 });
