@@ -117,16 +117,22 @@ test('migrate keeps recent sessions, skips old-but-recent prompts and live sessi
   await mkdir(join(f.sessionRoot, 'project', staleId), { recursive: true })
   await writeFile(join(f.sessionRoot, 'project', staleId, 'session.v3.jsonl'), JSON.stringify({ id: staleId, version: 3, createdAt: Date.now() - 40 * DAY, cwd: '/fixture/project' }) + '\n')
   await utimes(join(f.sessionRoot, 'project', staleId, 'session.v3.jsonl'), new Date(Date.now() - 40 * DAY), new Date(Date.now() - 40 * DAY))
+  // Imported sessions carry a fresh file mtime from the bulk copy but their
+  // recorded last prompt is months old — the projection must win over mtime.
+  const importedId = randomUUID()
+  await mkdir(join(f.sessionRoot, 'project', importedId), { recursive: true })
+  await writeFile(join(f.sessionRoot, 'project', importedId, 'session.v3.jsonl'), JSON.stringify({ id: importedId, version: 3, createdAt: Date.now() - 60 * DAY, cwd: '/fixture/project' }) + '\n')
+  await writeFile(join(f.projectionRoot, `${importedId}.json`), JSON.stringify({ version: 7, record: { identity: { formatVersion: 3, createdAt: Date.now() - 60 * DAY, cwd: '/fixture/project', isSeeded: false, inheritedEventCount: 0 }, rows: { sessionListMetadata: { ver: 1, seq: 2, val: { blank: false, lastPromptAt: Date.now() - 40 * DAY } } } } }))
   f.sessions.set(f.sessionId, {}) // loaded → live, must be skipped
   const result = await vaultMigrateSessions(f.deps, f.options, { days: 5, limit: 500 })
   assert.equal(result.ok, true, JSON.stringify(result))
-  assert.deepEqual(result.value.archived, [staleId])
+  assert.deepEqual([...result.value.archived].sort(), [staleId, importedId].sort())
   // The loaded session has a prompt within the horizon, so the projection check keeps it before the live check fires.
   await assert.ok(await exists(join(f.sessionRoot, 'project', f.sessionId, 'session.v3.jsonl')), 'recent-prompt session must stay')
   await absent(join(f.sessionRoot, 'project', staleId))
+  await absent(join(f.sessionRoot, 'project', importedId))
   const listing = await vaultList(f.options)
-  assert.equal(listing.items.length, 1)
-  assert.equal(listing.items[0].id, staleId)
+  assert.equal(listing.items.length, 2)
   // Repeated migrate is idempotent: nothing new to move.
   f.sessions.delete(f.sessionId)
   const again = await vaultMigrateSessions(f.deps, f.options, { days: 5 })

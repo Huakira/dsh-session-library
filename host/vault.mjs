@@ -65,10 +65,12 @@ async function readProjection(projectionRoot, id) {
     const rows = value?.record?.rows
     const metadata = rows?.sessionListMetadata?.val
     const title = rows?.title?.val
+    const createdAt = value?.record?.identity?.createdAt
     return {
       title: typeof title === 'string' ? title : '',
       blank: !!metadata?.blank,
       lastPromptAt: Number.isFinite(metadata?.lastPromptAt) ? Math.floor(metadata.lastPromptAt) : 0,
+      createdAt: Number.isFinite(createdAt) ? Math.floor(createdAt) : 0,
     }
   } catch { return undefined }
 }
@@ -242,24 +244,30 @@ export async function vaultMigrateSessions(deps, options, { days = 5, limit = 50
       if (!session.isDirectory() || session.isSymbolicLink()) continue
       const id = session.name
       if (!validSessionId(id) || index.sessions[id]) continue
-      // Cheap prefilter: the transcript's write time bounds every event time,
-      // so anything written within the horizon stays without deeper reads.
-      let transcriptPath = '', transcriptMtime = 0
-      try {
-        for (const entry of await readdir(join(r.sessionRoot, project.name, id), { withFileTypes: true })) {
-          if (!entry.isFile() || entry.isSymbolicLink() || !transcriptName(entry.name)) continue
-          const info = await lstat(join(r.sessionRoot, project.name, id, entry.name), { bigint: true })
-          if (info.mtimeNs > BigInt(transcriptMtime)) { transcriptMtime = info.mtimeNs; transcriptPath = join(r.sessionRoot, project.name, id, entry.name) }
-        }
-      } catch { continue }
-      if (!transcriptPath) continue
-      if (transcriptMtime >= BigInt(cutoff) * 1000000n) { kept.push(id); continue }
-      // The write time bounds event times from below, but a skewed clock or
-      // an exotic rewrite could disagree with the recorded last prompt; the
-      // projection cache is authoritative, so a recent prompt always keeps
-      // the session no matter how old the file looks.
+      // Recency is judged by the recorded last prompt, not the file write
+      // time: bulk imports (e.g. sessions copied over from another machine)
+      // reset every mtime to the import moment, which would otherwise keep
+      // months-old conversations on disk forever.
       const projection = await readProjection(r.projectionRoot, id)
       if ((projection?.lastPromptAt ?? 0) >= cutoff) { kept.push(id); continue }
+      if (!projection) {
+        // No projection record at all — fall back to the write time, which is
+        // still an upper bound on idleness for sessions that were never
+        // summarized by the host.
+        let recent = false
+        try {
+          for (const entry of await readdir(join(r.sessionRoot, project.name, id), { withFileTypes: true })) {
+            if (!entry.isFile() || entry.isSymbolicLink() || !transcriptName(entry.name)) continue
+            const info = await lstat(join(r.sessionRoot, project.name, id, entry.name), { bigint: true })
+            if (info.mtimeNs >= BigInt(cutoff) * 1000000n) { recent = true; break }
+          }
+        } catch { /* treat as old */ }
+        if (recent) { kept.push(id); continue }
+      } else if (!(projection.lastPromptAt >= 1) && (projection.createdAt ?? 0) >= cutoff) {
+        // Blank sessions never record a prompt; a blank created within the
+        // horizon is still fresh, an imported old blank is not.
+        kept.push(id); continue
+      }
       const busy = await inactive(deps, id)
       if (busy) { skipped.push({ id, code: busy.error.code }); continue }
       const result = await vaultArchiveSession(deps, options, id)
