@@ -87,6 +87,11 @@ export function installSidebar(ctx, React, { openLibrary, useConfig, useFolders,
       const current = new Map(statuses instanceof Map ? statuses : []);
       seenStatuses.current = current;
       sectionActions?.setRunning?.([...current].filter(([, status]) => status.running).map(([id]) => id));
+      // TEMP DIAGNOSTIC (green dot investigation): snapshot the official status map size + unread ids.
+      try {
+        const unread = [...current].filter(([, status]) => status.completionUnread).map(([id]) => id);
+        localStorage.setItem('dsl-official-status.v1', JSON.stringify({ t: Date.now(), size: current.size, running: [...current].filter(([, s]) => s.running).length, unread }));
+      } catch { /* diagnostic only */ }
       if (!before || !sectionActions) return;
       for (const [id, next] of current) {
         const prev = before.get(id) ?? {};

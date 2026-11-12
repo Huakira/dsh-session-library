@@ -87,15 +87,26 @@ export function installLibrary(ctx, React) {
     if (!outcomeTimer) outcomeTimer = setTimeout(flushOutcomes, 300);
   };
   ctx.effect(() => {
+    // TEMP DIAGNOSTIC (green dot investigation): record every remote event we see.
+    const debugRemote = (ev, detail) => {
+      try {
+        const key = 'dsl-remote-log.v1';
+        const log = JSON.parse(localStorage.getItem(key) || '[]');
+        log.push({ t: Date.now(), ev, ...detail });
+        if (log.length > 120) log.splice(0, log.length - 120);
+        localStorage.setItem(key, JSON.stringify(log));
+      } catch { /* diagnostic only */ }
+    };
     const off = [
-      ctx.remote?.$on?.('api-session/error', sessionId => markSessionError(sessionId, true)),
+      ctx.remote?.$on?.('api-session/error', sessionId => { debugRemote('error', { id: sessionId }); markSessionError(sessionId, true); }),
       ctx.remote?.$on?.('api-session/status', (sessionId, running) => {
+        debugRemote('status', { id: sessionId, running });
         if (running) { markSessionError(sessionId, false); outcomeSettled.delete(sessionId); return; }
         // First stop we observe for this session — including one that was
         // already running when the page loaded — settles against its log.
         queueOutcome(sessionId);
       }),
-      ctx.remote?.$on?.('api-session/removed', sessionId => { markSessionError(sessionId, false); outcomeSettled.delete(sessionId); outcomePending.delete(sessionId); }),
+      ctx.remote?.$on?.('api-session/removed', sessionId => { debugRemote('removed', { id: sessionId }); markSessionError(sessionId, false); outcomeSettled.delete(sessionId); outcomePending.delete(sessionId); }),
     ];
     return () => { for (const dispose of off) dispose?.(); clearTimeout(outcomeTimer); outcomeTimer = 0; outcomePending.clear(); outcomeSettled.clear(); };
   }, 'session-library error marks');
