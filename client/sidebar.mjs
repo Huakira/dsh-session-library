@@ -283,7 +283,6 @@ export function installSidebar(ctx, React, { openLibrary, useConfig, useFolders,
           h('button', { type: 'button', onClick: () => workspaceRequest.set(null), style: { ...buttonStyle, fontSize: 12, flex: 1, border: '1px solid var(--dsw-alias-border-l2)', textAlign: 'center' } }, text('取消', 'Cancel')),
           h('button', { type: 'submit', disabled: busy, style: { ...buttonStyle, fontSize: 12, flex: 1, border: '1px solid var(--dsw-alias-border-l2)', textAlign: 'center' } }, busy ? text('保存中…', 'Saving…') : pendingWorkspace.action === 'rename' ? text('保存', 'Save') : text('确认删除', 'Delete')))),
       h('div', { style: { minHeight: 0, flex: 1, overflowY: 'auto' } },
-        (list.phase !== 'ready' || folders.loading) && h('div', { role: 'status', 'data-dsl-cache-loading': usingCache ? '' : undefined, style: { padding: 8, fontSize: 12 } }, usingCache ? text('已显示缓存，正在更新…', 'Showing cached sessions, updating…') : text('正在加载会话…', 'Loading sessions…')),
         list.phase === 'ready' && visibleGroupCount === 0 && h('div', { style: { padding: 8, fontSize: 12 } }, needle ? [
           text('没有匹配的最近会话。', 'No recent sessions match.'),
           h('button', { key: 'search-library', type: 'button', onClick: () => openLibrary({ kind: 'query', query: needle }), style: { ...buttonStyle, fontSize: 12, color: 'var(--dsw-alias-label-secondary)' } }, `在会话库中搜索“${needle}”`),
@@ -292,7 +291,8 @@ export function installSidebar(ctx, React, { openLibrary, useConfig, useFolders,
         sectionData && showActive && sectionViewBlock('active', sectionData.activeGroups),
         sectionData && sectionData.showDivider && h('div', { key: 'dsl-divider', 'data-dsl-section-divider': '', role: 'separator', style: { borderTop: '1px dashed var(--dsw-alias-border-l2)', margin: '6px 4px' } }),
         sectionData && showInactive && sectionViewBlock('inactive', sectionData.inactiveGroups),
-        ...(legacyGroups ? legacyGroups.map(group => groupView(group)) : [])));
+        ...(legacyGroups ? legacyGroups.map(group => groupView(group)) : [])),
+      (list.phase !== 'ready' || folders.loading) && h('div', { role: 'status', 'data-dsl-cache-loading': usingCache ? '' : undefined, style: { padding: 8, fontSize: 12 } }, usingCache ? text('已显示缓存，正在更新…', 'Showing cached sessions, updating…') : text('正在加载会话…', 'Loading sessions…')));
   }
   RecentSidebar.displayName = 'SessionLibraryRecentSidebar';
   return ctx.slots.inject(SIDEBAR_SLOT, () => ctx.slots.register({ name: SIDEBAR_SLOT, priority: -100 }, RecentSidebar));
