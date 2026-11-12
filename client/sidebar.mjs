@@ -87,10 +87,12 @@ export function installSidebar(ctx, React, { openLibrary, useConfig, useFolders,
       const current = new Map(statuses instanceof Map ? statuses : []);
       seenStatuses.current = current;
       sectionActions?.setRunning?.([...current].filter(([, status]) => status.running).map(([id]) => id));
-      // TEMP DIAGNOSTIC (green dot investigation): snapshot the official status map size + unread ids.
+      // TEMP DIAGNOSTIC (green dot investigation): snapshot the official status map,
+      // including each flagged row's list-side retainedBy.mainView (isMain's input).
       try {
-        const unread = [...current].filter(([, status]) => status.completionUnread).map(([id]) => id);
-        localStorage.setItem('dsl-official-status.v1', JSON.stringify({ t: Date.now(), size: current.size, running: [...current].filter(([, s]) => s.running).length, unread }));
+        const flagged = [...current].filter(([, status]) => status.running || status.completionUnread || status.pendingInteraction)
+          .map(([id, status]) => ({ id: id.slice(8, 24), r: status.running ? 1 : 0, u: status.completionUnread ? 1 : 0, p: status.pendingInteraction ? 1 : 0, mv: list.byId?.[id]?.retainedBy?.mainView ?? 0 }));
+        localStorage.setItem('dsl-official-status.v1', JSON.stringify({ t: Date.now(), size: current.size, phase: list.phase, flagged }));
       } catch { /* diagnostic only */ }
       if (!before || !sectionActions) return;
       for (const [id, next] of current) {
