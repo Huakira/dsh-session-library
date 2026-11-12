@@ -154,6 +154,12 @@ export function installLibrary(ctx, React) {
     try { localStorage.setItem(SECTION_KEY, JSON.stringify({ ...sectionState, policy: 2 })); } catch { /* private mode */ }
     for (const fn of sectionListeners) fn();
   };
+  const publishSections = next => {
+    sectionState = next;
+    sectionSnapshot = { ...next };
+    scheduleSectionPersist();
+    for (const fn of sectionListeners) fn();
+  };
   async function pullSections() {
     if (disposed || sectionPushing) return;
     try {
