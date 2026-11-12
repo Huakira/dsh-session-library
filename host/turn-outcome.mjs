@@ -6,12 +6,20 @@ const MAX_BATCH = 25
 /**
  * Last turn outcome per session, read from the persisted log.
  *
- * The host broadcasts `api-session/error` only for agent-level failures; a turn
- * that ends in error stays inside the session log. `turn/end` events carry the
- * reason, and session-query projects a reason of `error` into non-empty text
- * ("error <message>") while `completed` projects to nothing — so the last
- * surviving `turn/end` document is the outcome that matters, and only genuine
- * failures (not user stops, which read "aborted") come back as errors.
+ * The host broadcasts `api-session/error` only for agent-level failures; a
+ * turn that ends in error stays inside the session log. session-query's
+ * semantic documents include `turn/end` only for *abnormal* endings — its
+ * `turnEndText()` maps `error` to "error <message>", `aborted`/`max-tokens`/
+ * `interrupted` to their kind, and `completed` to empty text (the document is
+ * skipped). So the last document in the log tells us exactly what happened:
+ *
+ *   - ends with `turn/end` whose text starts with "error" -> the session's
+ *     most recent turn failed;
+ *   - ends with any message/tool document -> a later turn ran (a retry or a
+ *     normal completion), so an older failure no longer counts.
+ *
+ * `turn/end` events are `log-only` (not part of the model-visible surface), so
+ * no surface filter may be applied — filtering by `current` drops them all.
  *
  * @param deps - injected `{ sessionQuery }`.
  * @param sessionIds - sessions to inspect; unknown ids are omitted.
@@ -24,13 +32,13 @@ export async function turnOutcomes({ sessionQuery }, sessionIds) {
   if (typeof sessionQuery?.filterEvents !== 'function') throw new Error('session query unavailable')
   await Promise.all(ids.map(async id => {
     try {
-      const documents = await sessionQuery.filterEvents(id, [
-        { kind: 'type', values: ['turn/end'] },
-        { kind: 'surface', values: ['current'] },
-      ])
-      const eligible = (Array.isArray(documents) ? documents : []).filter(event => event?.sessionId === id && event.type === 'turn/end')
+      // No filters: every semantic document, in ascending seq order. A
+      // `completed` turn contributes no turn/end document, so the final
+      // document is either the last message/tool event or an abnormal ending.
+      const documents = await sessionQuery.filterEvents(id, [])
+      const eligible = (Array.isArray(documents) ? documents : []).filter(event => event?.sessionId === id)
       const last = eligible.at(-1)
-      outcomes[id] = last === void 0 ? 'ok' : String(last.text ?? '').startsWith('error') ? 'error' : 'ok'
+      outcomes[id] = last?.type === 'turn/end' && String(last.text ?? '').startsWith('error') ? 'error' : 'ok'
     } catch { outcomes[id] = 'unknown' }
   }))
   return outcomes

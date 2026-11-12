@@ -80,24 +80,28 @@ test('cwd path fallback groups unaccounted sessions into the matching workspace'
  assert.equal(withProjects.find(g=>g.key==='project:w1').total,2);
  assert.equal(groups.find(g=>g.key==='ungrouped').total,2);
 });
-test('reading a session never reshuffles the list; only pins and activity time decide rank',()=>{
- const ids=['idle-new','running-old'];
+test('active band, then the open session at the boundary, then idle by time',()=>{
+ const ids=['idle-new','running-old','idle-old'];
  const sessions={ids,byId:{
-  'idle-new':{id:'idle-new',displayTitle:'新但空闲',cwd:'/w',updatedAt:200},
+  'idle-new':{id:'idle-new',displayTitle:'新但空闲',cwd:'/w',updatedAt:300},
   'running-old':{id:'running-old',displayTitle:'旧但运行中',cwd:'/w',updatedAt:100},
+  'idle-old':{id:'idle-old',displayTitle:'更旧且空闲',cwd:'/w',updatedAt:50},
  }};
  const workspaces={items:[{workspaceId:'w1',title:'研究',path:'/w',sessionIds:[]}],archivedSessionIds:[],pinnedSessionIds:[]};
  const statuses=new Map([['running-old',{running:true}]]);
- const order=()=>groupSidebarRows(sessions,sessions,workspaces,{},'folders').find(g=>g.key==='project:w1').rows.map(r=>r.id);
- // Transient states (passed as the 6th legacy arg, ignored) do not change order.
- assert.deepEqual(order(),['idle-new','running-old']);
- assert.deepEqual(groupSidebarRows(sessions,sessions,workspaces,{},'folders',statuses).find(g=>g.key==='project:w1').rows.map(r=>r.id),['idle-new','running-old']);
- // Clicking through to read: the older session becomes the current one, but
- // still stays in its activity-time slot instead of jumping to the top.
- sessions.byId['running-old'].retainedBy={mainView:1};
- sessions.byId['running-old'].completionUnread=false;
- assert.deepEqual(order(),['idle-new','running-old']);
- // A durable pin is the only state allowed to promote a row.
- workspaces.pinnedSessionIds=['running-old'];
- assert.deepEqual(order(),['running-old','idle-new']);
+ const order=()=>groupSidebarRows(sessions,sessions,workspaces,{},'folders',statuses).find(g=>g.key==='project:w1').rows.map(r=>r.id);
+ // tier 1 (running) first, then idle sessions by activity time.
+ assert.deepEqual(order(),['running-old','idle-new','idle-old']);
+ // Opening an idle session moves it to the fixed tier-2 boundary: below every
+ // active session, above every idle one — never to the very top.
+ sessions.byId['idle-old'].retainedBy={mainView:1};
+ assert.deepEqual(order(),['running-old','idle-old','idle-new']);
+ // Opening a different session swaps which row sits at the boundary, but the
+ // band layout (and therefore the top of the list) stays put.
+ sessions.byId['idle-old'].retainedBy={};
+ sessions.byId['idle-new'].retainedBy={mainView:1};
+ assert.deepEqual(order(),['running-old','idle-new','idle-old']);
+ // A pin is the only thing that outranks the active band.
+ workspaces.pinnedSessionIds=['idle-old'];
+ assert.deepEqual(order(),['idle-old','running-old','idle-new']);
 });

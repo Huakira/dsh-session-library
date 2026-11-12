@@ -9,18 +9,22 @@ function fixture(count = 100) {
   return { ids, byId, phase: 'ready', projectionsBySession: Object.fromEntries(ids.map(id => [id, { title: id }])) };
 }
 
-test('renders recent thirty plus current, pinned, running and pending without changing complete catalog', () => {
+test('only durable facts select rows; opening/running/unread never add rows', () => {
   const list = fixture();
+  // s000 is the currently open session, s001 running, s003 pending, s004 unread.
+  // None of these transient states may pull a row into the bounded projection.
   list.byId.s000.retainedBy.mainView = 1;
   list.byId.s001.running = true;
+  list.byId.s000.updatedAt = 1;
   const workspace = { pinnedSessionIds: ['s002'], archivedSessionIds: [] };
-  const statuses = new Map([['s003', { pendingInteraction: { key: 'approval' } }], ['s004', { completionUnread: true }]]);
   const original = structuredClone(list);
-  const result = projectSidebarList(list, workspace, statuses, 30);
-  assert.equal(result.list.ids.length, 35);
-  for (const id of ['s000', 's001', 's002', 's003', 's004', 's070', 's099']) assert.ok(result.list.byId[id]);
-  assert.equal(result.list.byId.s069, undefined);
-  assert.equal(Object.keys(result.list.projectionsBySession).length, 35);
+  const result = projectSidebarList(list, workspace, 30);
+  // 30 most recent by updatedAt + the pinned s002 (old, outside the window).
+  // A pin is the only transient-free state allowed to add a row.
+  assert.equal(result.list.ids.length, 31);
+  for (const id of ['s002', 's070', 's099']) assert.ok(result.list.byId[id]);
+  for (const id of ['s000', 's001', 's003', 's004', 's069']) assert.equal(result.list.byId[id], undefined);
+  assert.equal(Object.keys(result.list.projectionsBySession).length, 31);
   assert.deepEqual(list, original);
 });
 
@@ -28,25 +32,26 @@ test('hidden archives, subagents and unrelated blank sessions do not consume rec
   const list = fixture(40);
   list.byId.s039.blank = true;
   list.byId.s038.origin = 'subagent';
-  const { list: projected } = projectSidebarList(list, { archivedSessionIds: ['s037'] }, new Map(), 30);
+  const { list: projected } = projectSidebarList(list, { archivedSessionIds: ['s037'] }, 30);
   assert.equal(projected.ids.length, 30);
   assert.ok(projected.byId.s007);
   for (const id of ['s037', 's038', 's039']) assert.equal(projected.byId[id], undefined);
 });
 
-test('live stop overrides old catalog running flag; current retained fallback stays available', () => {
+test('blank/current rows stay out of the projection regardless of activity state', () => {
   const list = fixture(35);
   list.byId.s000.running = true;
   list.byId.local = { id: 'local', updatedAt: 0, retainedBy: { mainView: 1 }, blank: true };
-  const { list: projected } = projectSidebarList(list, {}, new Map([['s000', { running: false }]]), 30);
+  const { list: projected } = projectSidebarList(list, {}, 30);
+  // s000 is simply the oldest by time, not excluded by its running flag.
   assert.equal(projected.byId.s000, undefined);
-  assert.ok(projected.byId.local);
+  assert.equal(projected.byId.local, undefined);
   assert.equal(projected.ids.includes('local'), false);
 });
 
 test('invalid configuration cannot expand sidebar to an unbounded list', () => {
   for (const value of [undefined, 0, -2, Infinity, 999999, 1.5, '30']) assert.equal(normalizeSidebarLimit(value), 30);
-  assert.equal(projectSidebarList(fixture(), {}, new Map(), 10).list.ids.length, 10);
+  assert.equal(projectSidebarList(fixture(), {}, 10).list.ids.length, 10);
 });
 
 test('public single-seat override owns no foreign capabilities and disposes cleanly', () => {
@@ -80,7 +85,7 @@ test('folder assignment overrides native project only in folders mode without mu
   const workspace = { items: [{ workspaceId: 'p', title: 'Project', sessionIds: list.ids.slice(0, 5) }] };
   const state = { folders: [{ id: 'f', name: 'Research' }, { id: 'empty', name: 'Empty' }], assignments: { s000: 'f', s001: 'deleted-folder' } };
   const before = structuredClone({ workspace, state });
-  const projected = projectSidebarList(list, workspace, new Map(), 30).list;
+  const projected = projectSidebarList(list, workspace, 30).list;
   const groups = groupSidebarRows(list, projected, workspace, state);
   assert.deepEqual(groups.find(g => g.folderId === 'f').rows.map(r => r.id), ['s000']);
   assert.equal(groups.find(g => g.folderId === 'empty').rows.length, 0);
@@ -95,19 +100,18 @@ test('folder assignment overrides native project only in folders mode without mu
   assert.equal(moved.find(g => g.ungrouped).total, 4);
 });
 
-test('group fold emits zero rows; expanded group includes old active attention beyond five', () => {
+test('group fold emits zero rows; reading never splices attention rows in', () => {
   const list = fixture(40);
   list.byId.s000.retainedBy.mainView = 1;
-  const statuses = new Map([['s001', { running: true }]]);
   const workspace = { pinnedSessionIds: ['s002'] };
-  const projection = projectSidebarList(list, workspace, statuses, 30);
-  const group = groupSidebarRows(list, projection.list, workspace, {}, 'folders', statuses)[0];
+  const projection = projectSidebarList(list, workspace, 30);
+  const group = groupSidebarRows(list, projection.list, workspace, {}, 'folders')[0];
   const pinned = new Set(workspace.pinnedSessionIds);
-  assert.equal(visibleSidebarGroupRows(group, false, 5, pinned, statuses).length, 0);
-  const visible = visibleSidebarGroupRows(group, true, 5, pinned, statuses);
-  // Order is stable while reading, so attention rows can fall beyond the
-  // first five again; visibleSidebarGroupRows still surfaces them.
-  assert.equal(visible.length, 7);
-  for (const id of ['s000', 's001', 's002']) assert.ok(visible.some(row => row.id === id));
-  assert.equal(Object.keys(projection.list.byId).length, 33);
+  assert.equal(visibleSidebarGroupRows(group, false, 5, pinned).length, 0);
+  const visible = visibleSidebarGroupRows(group, true, 5, pinned);
+  // Exactly the first five by durable order — the currently-open row (s000)
+  // is the oldest and must not be spliced in just because it is active.
+  assert.equal(visible.length, 5);
+  assert.equal(visible.some(row => row.id === 's000'), false);
+  assert.equal(Object.keys(projection.list.byId).length, 31);
 });

@@ -2,26 +2,54 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { turnOutcomes } from '../host/turn-outcome.mjs'
 
-const stub = outcomes => ({
-  filterEvents: async (sessionId) => {
-    const kind = outcomes[sessionId];
+const doc = (sessionId, type, text) => ({ sessionId, type, text, surface: 'log-only' })
+const stub = (outcomes, calls = []) => ({
+  filterEvents: async (sessionId, filters) => {
+    calls.push({ sessionId, filters })
+    const kind = outcomes[sessionId]
     if (kind === 'missing') throw new Error('not found')
-    return kind === undefined ? [] : [{ sessionId, type: 'turn/end', surface: 'current', text: kind === 'error' ? 'error boom' : kind }]
+    if (kind === undefined) return []
+    if (Array.isArray(kind)) return kind.map(d => doc(sessionId, d.type, d.text))
+    return [doc(sessionId, 'turn/end', kind === 'error' ? 'error boom' : kind)]
   },
 })
 
-test('a session whose last turn/end reason is error reads as error', async () => {
+test('a session whose final document is an error turn/end reads as error', async () => {
   const out = await turnOutcomes({ sessionQuery: stub({ a: 'error', b: 'aborted' }) }, ['a', 'b'])
   assert.equal(out.a, 'error')
   assert.equal(out.b, 'ok')
 })
 
-test('user stops (aborted) and normal completions never mark', async () => {
-  const out = await turnOutcomes({ sessionQuery: stub({ a: 'aborted', b: 'completed', c: 'max-tokens' }) }, ['a', 'b', 'c'])
+test('user stops and abnormal-but-not-error endings never mark', async () => {
+  const out = await turnOutcomes({ sessionQuery: stub({ a: 'aborted', b: 'max-tokens', c: 'interrupted' }) }, ['a', 'b', 'c'])
   assert.deepEqual(out, { a: 'ok', b: 'ok', c: 'ok' })
 })
 
-test('sessions without any surviving turn/end read ok', async () => {
+test('a later message means the session recovered; an older error does not stick', async () => {
+  const sessionQuery = stub({
+    a: [
+      { type: 'turn/end', text: 'error old failure' },
+      { type: 'user/message', text: 'retry' },
+      { type: 'assistant/message', text: 'done' },
+    ],
+    b: [
+      { type: 'turn/end', text: 'error old failure' },
+      { type: 'turn/end', text: 'aborted' },
+    ],
+  })
+  const out = await turnOutcomes({ sessionQuery }, ['a', 'b'])
+  assert.equal(out.a, 'ok')
+  assert.equal(out.b, 'ok')
+})
+
+test('no surface filter: turn/end events are log-only and must not be dropped', async () => {
+  const calls = []
+  await turnOutcomes({ sessionQuery: stub({ a: 'error' }, calls) }, ['a'])
+  assert.equal(calls.length, 1)
+  assert.deepEqual(calls[0].filters, [])
+})
+
+test('sessions without any document read ok', async () => {
   const out = await turnOutcomes({ sessionQuery: stub({}) }, ['x'])
   assert.equal(out.x, 'ok')
 })
@@ -29,14 +57,6 @@ test('sessions without any surviving turn/end read ok', async () => {
 test('an unreadable session reads unknown and never marks', async () => {
   const out = await turnOutcomes({ sessionQuery: stub({ gone: 'missing' }) }, ['gone'])
   assert.equal(out.gone, 'unknown')
-})
-
-test('only the last turn/end decides; an older error does not stick', async () => {
-  const sessionQuery = { filterEvents: async () => [
-    { sessionId: 'a', type: 'turn/end', surface: 'current', text: 'error old failure' },
-    { sessionId: 'a', type: 'turn/end', surface: 'current', text: 'aborted' },
-  ] }
-  assert.equal((await turnOutcomes({ sessionQuery }, ['a'])).a, 'ok')
 })
 
 test('ids are de-duplicated, non-strings dropped and the batch capped', async () => {

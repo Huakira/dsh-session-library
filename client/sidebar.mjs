@@ -43,16 +43,16 @@ export function installSidebar(ctx, React, { openLibrary, useConfig, useFolders,
       for (const [span, name] of units) if (seconds >= span) return `${Math.floor(seconds / span)}${name}前`;
       return '刚刚';
     };
-    const projection = React.useMemo(() => projectSidebarList(list, workspace, statuses, config?.sidebarLimit), [list, workspace, statuses, config?.sidebarLimit]);
+    const projection = React.useMemo(() => projectSidebarList(list, workspace, config?.sidebarLimit), [list, workspace, config?.sidebarLimit]);
     const pinned = React.useMemo(() => new Set(workspace.pinnedSessionIds ?? []), [workspace.pinnedSessionIds]);
     const archived = React.useMemo(() => new Set(workspace.archivedSessionIds ?? []), [workspace.archivedSessionIds]);
     const grouping = ['recent', 'projects', 'folders'].includes(config?.sidebarGrouping) ? config.sidebarGrouping : 'folders';
     const groups = React.useMemo(() => {
-      const base = groupSidebarRows(list, projection.list, workspace, folders, grouping);
+      const base = groupSidebarRows(list, projection.list, workspace, folders, grouping, statuses);
       if (!needle) return base;
       const match = row => ((row.displayTitle ?? row.title ?? '') + ' ' + row.id).toLocaleLowerCase().includes(needle);
       return base.map(group => ({ ...group, rows: group.rows.filter(match), total: group.rows.filter(match).length })).filter(group => group.rows.length > 0);
-    }, [list, projection.list, workspace, folders, grouping, needle]);
+    }, [list, projection.list, workspace, folders, grouping, statuses, needle]);
     const [error, setError] = React.useState('');
     const [busy, setBusy] = React.useState(false);
     const [expansion, setExpansion] = React.useState({});
@@ -120,7 +120,7 @@ export function installSidebar(ctx, React, { openLibrary, useConfig, useFolders,
     };
     const groupView = group => {
       const expanded = expansion[group.key] !== false;
-      const rows = needle || grouping === 'recent' ? group.rows : visibleSidebarGroupRows(group, expanded, config?.groupLimit, pinned, statuses);
+      const rows = needle || grouping === 'recent' ? group.rows : visibleSidebarGroupRows(group, expanded, config?.groupLimit, pinned);
       const filter = { ...(group.workspaceId ? { workspaceId: group.workspaceId } : {}), ...(group.folderId ? { folderId: group.folderId } : {}), ...(group.ungrouped ? { ungrouped: true } : {}) };
       if (grouping === 'recent') return h('div', { key: group.key }, ...rows.map(rowView));
       return h('div', { key: group.key, 'data-dsl-group': group.key, style: { paddingBottom: 6 } },
