@@ -136,8 +136,20 @@ export function installSidebar(ctx, React, { openLibrary, useConfig, useFolders,
     const directoryNavigation = React.useMemo(() => ctx.get?.('uiWorkspace'), []);
     const [expansion, setExpansion] = React.useState({});
     const [moreSections, setMoreSections] = React.useState({});
+    // While only the startup cache is shown the host does not know these
+    // sessions yet (sessions.retain: unknown session), so remember the click
+    // and open it as soon as the live list is ready.
+    const pendingOpen = React.useRef(null);
+    React.useEffect(() => {
+      const id = pendingOpen.current;
+      if (!id || usingCache || liveList.phase !== 'ready') return;
+      pendingOpen.current = null;
+      if (!liveList.byId?.[id]) { setError(text('该会话已不存在', 'That session no longer exists')); return; }
+      try { ctx.get('uiWorkspace')?.openSession(id); setError(''); } catch (reason) { setError(String(reason?.message ?? reason)); }
+    }, [usingCache, liveList.phase]);
     const open = row => {
       if (archived.has(row.id)) { openLibrary(); return; }
+      if (usingCache) { pendingOpen.current = row.id; setError(text('正在更新会话列表，更新完成后自动打开…', 'Updating the session list; the session opens when it finishes…')); return; }
       try {
         const navigation = ctx.get('uiWorkspace');
         if (!navigation) throw new Error('会话导航暂不可用');
