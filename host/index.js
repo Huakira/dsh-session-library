@@ -9,6 +9,7 @@ import { previewSession } from './preview.mjs'
 import { turnOutcomes } from './turn-outcome.mjs'
 import { createContentSearch, createContentSearchHandler } from './search.mjs'
 import { createFolderStore, createFolderRequestHandlers } from './folders.mjs'
+import { createSectionStore, createSectionRequestHandlers } from './sections.mjs'
 import { createDocumentReader } from './documents.mjs'
 import { createVaultTools, createVaultTranscriptReader, VAULT_PROMPT_TEXT } from './tools.mjs'
 
@@ -33,6 +34,7 @@ export function apply(ctx, config = {}) {
   const readDocuments = createDocumentReader(() => ({ sessionPersistence: ctx.sessionPersistence, sessions: ctx.sessions, sessionQuery: ctx.get('sessionQuery') }))
   const queryDeps = () => ({ workspaceRegistry: ctx.workspaceRegistry, sessionQuery: ctx.get('sessionQuery'), readDocuments, getFolderSnapshot: () => folderStore.list() })
   const folderHandlers = createFolderRequestHandlers({ isTrustedRequest, store: folderStore })
+  const sectionHandlers = createSectionRequestHandlers({ isTrustedRequest, store: createSectionStore({ dshHome: options.dshHome }) })
   const searchHandler = createContentSearchHandler({ isTrustedRequest, search: createContentSearch(queryDeps) })
   const archive = createArchiveRequestHandlers({
     isTrustedRequest,
@@ -96,11 +98,13 @@ export function apply(ctx, config = {}) {
     ['vault/list', vaultHandlers.list], ['vault/archive', vaultHandlers.archive],
     ['vault/migrate', vaultHandlers.migrate], ['vault/restore', vaultHandlers.restore],
     ...Object.entries(folderHandlers).map(([action, handler]) => [`folders/${action}`, handler]),
+    ...Object.entries(sectionHandlers).map(([action, handler]) => [`sections/${action}`, handler]),
   ]) {
     ctx.effect(() => ctx.webServer.register({ kind: 'exact', path: `/plugins/dsh-session-library/${path}`, handler }), `dsh-session-library: ${path}`)
   }
 }
 
+export { createSectionStore, createSectionRequestHandlers } from './sections.mjs'
 export { createFolderStore, createFolderRequestHandlers, createContentSearch, createContentSearchHandler, hostRequestFence, createLibraryRequestHandlers, listTrash, restoreTrashSafely, trashSessionSafely, previewSession }
 export { vaultArchiveSession, vaultList, vaultMigrateSessions, vaultRestoreSession } from './vault.mjs'
 export { createArchiveRequestHandlers, searchArchivedSessions, restoreArchivedSession, reconcileDeletedArchive } from './archive-manager.mjs'

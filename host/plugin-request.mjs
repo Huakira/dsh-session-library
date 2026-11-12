@@ -12,7 +12,7 @@ export function sendJson(res, status, body) {
   res.end(JSON.stringify(body))
 }
 
-export async function readPluginPost(req, res, isTrustedRequest, confirmation) {
+export async function readPluginPost(req, res, isTrustedRequest, confirmation, maxBytes = MAX_REQUEST_BYTES) {
   if (req.method !== 'POST') {
     sendJson(res, 405, failure('method-not-allowed', '此操作仅接受 POST 请求。'))
     return
@@ -36,7 +36,7 @@ export async function readPluginPost(req, res, isTrustedRequest, confirmation) {
     for await (const chunk of req) {
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
       size += buffer.length
-      if (size > MAX_REQUEST_BYTES) {
+      if (size > maxBytes) {
         sendJson(res, 413, failure('request-too-large', '请求过大。'))
         return
       }

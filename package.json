@@ -1,6 +1,6 @@
 {
   "name": "dsh-session-library",
-  "version": "0.2.12",
+  "version": "0.2.13",
   "description": "Lightweight recent-session sidebar and a searchable, paginated session library with recoverable cleanup for DSH",
   "type": "module",
   "license": "MIT",
