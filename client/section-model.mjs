@@ -1,7 +1,7 @@
 // Active / Inactive session sections. This module is pure and dependency-free:
 // the bundle concatenates it with the other client/*.mjs files into one scope.
 export const INACTIVITY_THRESHOLD = 15 * 60 * 1000;
-export const MIN_ACTIVE_COUNT = 8;
+export const MIN_ACTIVE_COUNT = 12;
 export const DEMOTE_INTERVAL = 60 * 1000;
 export const SECTION_GROUP_CAP = 5;
 
@@ -95,6 +95,17 @@ export function activateSession(state, sessionId, now = Date.now(), { displayedA
   };
 }
 
+/** Manual demotion: move one active row to the top of Inactive, regardless of the floor. */
+export function deactivateSession(state, sessionId) {
+  if (typeof sessionId !== 'string' || !state.activeOrder.includes(sessionId)) return state;
+  return {
+    ...state,
+    activeOrder: state.activeOrder.filter(id => id !== sessionId),
+    inactiveOrder: [sessionId, ...state.inactiveOrder.filter(id => id !== sessionId)],
+    ...(state.activeViewOrder ? { activeViewOrder: state.activeViewOrder.filter(id => id !== sessionId) } : {}),
+  };
+}
+
 /** Freeze the Active view too, including the inactive rows borrowed to fill eight. */
 export function rememberActiveView(state, ids) {
   const order = [...new Set(ids)];
@@ -163,14 +174,8 @@ export function selectSections(state, { view = 'all', limit = 30, pinnedIds = []
   const budget = Math.max(0, max - pinned.size);
   const activeRows = (mode === 'inactive' ? [] : state.activeOrder).filter(id => !pinned.has(id));
   const inactiveRows = (mode === 'active' ? [] : state.inactiveOrder).filter(id => !pinned.has(id));
-  // Active-only is a useful minimum-eight window; All shows true membership.
-  // Borrow rows for display only, never move them between the persisted orders.
-  if (mode === 'active' && activeRows.length < MIN_ACTIVE_COUNT) {
-    const candidates = state.inactiveOrder.filter(id => !pinned.has(id));
-    const remembered = new Map((state.activeViewOrder ?? []).map((id, i) => [id, i]));
-    candidates.sort((a, b) => ((remembered.get(a) ?? Infinity) - (remembered.get(b) ?? Infinity)) || ((state.lastActivity?.[b] ?? 0) - (state.lastActivity?.[a] ?? 0)));
-    activeRows.push(...candidates.slice(0, MIN_ACTIVE_COUNT - activeRows.length));
-  }
+  // Rows already in Inactive never reappear in Active just because Active is
+  // short: the minimum only shields active rows from timeout demotion.
   if (mode === 'active' && state.activeViewOrder) {
     const rank = new Map(state.activeViewOrder.map((id, i) => [id, i]));
     activeRows.sort((a, b) => (rank.get(a) ?? Infinity) - (rank.get(b) ?? Infinity));

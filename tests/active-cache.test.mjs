@@ -42,26 +42,26 @@ test('cold response titles replace directory fallbacks before startup metadata i
   assert.equal(input.list.byId.s0.title, undefined);
 });
 
-test('roundtrip returns a cached catalog with pinned and minimum-eight selection', () => {
+test('roundtrip returns a cached catalog with pinned and active selection', () => {
   const { store } = saved();
   const cache = readActiveCache(store, NOW + 1);
   assert.equal(cache.savedAt, NOW);
   assert.equal(cache.list.phase, 'cached');
-  assert.deepEqual(cache.list.ids, ['s10', 's0', 's1', 's2', 's3', 's4', 's5', 's6', 's7']);
+  assert.deepEqual(cache.list.ids, ['s10', 's0', 's1']);
   assert.deepEqual(cache.workspace.pinnedSessionIds, ['s10']);
   assert.deepEqual(cache.workspace.archivedSessionIds, []);
-  assert.deepEqual(cache.workspace.items[0].sessionIds, ['s0', 's1', 's2', 's3', 's4', 's5', 's6', 's7', 's10']);
+  assert.deepEqual(cache.workspace.items[0].sessionIds, ['s0', 's1', 's10']);
   assert.deepEqual(cache.sections.activeOrder, ['s0', 's1']);
-  assert.deepEqual(cache.sections.inactiveOrder, ['s2', 's3', 's4', 's5', 's6', 's7', 's10']);
+  assert.deepEqual(cache.sections.inactiveOrder, ['s10']);
 });
 
-test('inactive borrowing follows activity while stored partition order and input stay intact', () => {
+test('cache stores only active rows while stored partition order and input stay intact', () => {
   const input = fixture();
   input.sections.inactiveOrder.reverse();
   const before = structuredClone(input);
   const { store } = saved(input);
   const cache = readActiveCache(store, NOW);
-  assert.deepEqual(cache.sections.inactiveOrder, ['s10', 's7', 's6', 's5', 's4', 's3', 's2']);
+  assert.deepEqual(cache.sections.inactiveOrder, ['s10']);
   assert.deepEqual(input, before);
 });
 
@@ -81,10 +81,12 @@ test('historical blanks, subagents, parented and archived rows are removed befor
   input.list.byId.s2.parentId = 'parent';
   input.list.byId.s3.archived = true;
   input.workspace.archivedSessionIds = ['s4', 's10'];
+  input.sections.activeOrder = ['s0', 's1', 's2', 's3', 's4', 's5', 's6'];
+  input.sections.inactiveOrder = input.list.ids.filter(id => !input.sections.activeOrder.includes(id));
   const { store } = saved(input);
   const cache = readActiveCache(store, NOW);
-  assert.deepEqual(cache.list.ids, ['s5', 's6', 's7', 's8', 's9', 's11', 's12', 's13']);
-  assert.deepEqual(cache.sections.activeOrder, []);
+  assert.deepEqual(cache.list.ids, ['s5', 's6']);
+  assert.deepEqual(cache.sections.activeOrder, ['s5', 's6']);
   assert.deepEqual(cache.workspace.pinnedSessionIds, []);
 });
 

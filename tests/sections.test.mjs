@@ -4,7 +4,7 @@ import {
   INACTIVITY_THRESHOLD, MIN_ACTIVE_COUNT, SECTION_GROUP_CAP,
   normalizeSectionView, emptySectionState, normalizeSectionState,
   reconcileSections, activateSession, refreshSession, removeSession,
-  runDemotions, selectSections, rememberActiveView,
+  runDemotions, selectSections, rememberActiveView, deactivateSession,
 } from '../client/section-model.mjs';
 
 const NOW = 1_000_000;
@@ -22,7 +22,7 @@ function seeded() {
 
 test('constants match the confirmed spec', () => {
   assert.equal(INACTIVITY_THRESHOLD, 15 * 60 * 1000);
-  assert.equal(MIN_ACTIVE_COUNT, 8);
+  assert.equal(MIN_ACTIVE_COUNT, 12);
   assert.equal(SECTION_GROUP_CAP, 5);
 });
 
@@ -87,20 +87,6 @@ test('activate moves a row to the very top and out of the inactive section', () 
   const restarted = normalizeSectionState(JSON.parse(JSON.stringify(again)));
   assert.deepEqual(activateSession(restarted, 'b', NOW + 2).activeOrder, again.activeOrder);
   assert.equal(activateSession(again, 'b', NOW + 2, { forceTop: true }).activeOrder[0], 'b');
-});
-
-test('an inactive row already displayed in Active stays in its displayed position after sending and restarting', () => {
-  const initial = { lastActivity: { a: 90, b: 80, c: 70, d: 60, e: 50, f: 40, g: 30, h: 20, i: 10 }, activeOrder: ['a', 'b'], inactiveOrder: ['c', 'd', 'e', 'f', 'g', 'h', 'i'] };
-  const shown = selectSections(initial, { view: 'active' }).activeIds;
-  const remembered = rememberActiveView(initial, shown);
-  const next = activateSession(remembered, 'd', 100, { displayedActiveIds: shown });
-  assert.deepEqual(selectSections(next, { view: 'active' }).activeIds, shown);
-  assert.equal(next.inactiveOrder.includes('d'), false);
-  assert.deepEqual(selectSections(normalizeSectionState(JSON.parse(JSON.stringify(next))), { view: 'active' }).activeIds, shown);
-  const fromOutside = activateSession(next, 'i', 110, { displayedActiveIds: shown });
-  assert.equal(selectSections(fromOutside, { view: 'active' }).activeIds[0], 'i');
-  const withBlank = reconcileSections(next, [...initial.activeOrder, ...initial.inactiveOrder, 'new'], { now: 110, blankIds: ['new'] });
-  assert.equal(selectSections(withBlank, { view: 'active' }).activeIds[0], 'new');
 });
 
 test('refresh only advances the demotion clock; orders keep their identity', () => {
@@ -204,7 +190,7 @@ test('selectSections spends the global budget on active rows first', () => {
   assert.deepEqual(all.inactiveIds, ['e']);
   assert.equal(all.showDivider, true);
   const active = selectSections(state, { view: 'active', limit: 5 });
-  assert.deepEqual(active.activeIds, ['a', 'b', 'c', 'd', 'e']);
+  assert.deepEqual(active.activeIds, ['a', 'b', 'c', 'd']);
   assert.deepEqual(active.inactiveIds, []);
   assert.equal(active.showDivider, false);
   const inactive = selectSections(state, { view: 'inactive', limit: 5 });
@@ -225,7 +211,7 @@ test('pinned rows float above both sections and consume the same budget', () => 
   assert.equal(onlyInactive.showDivider, false);
 });
 
-test('only the Active view borrows up to eight rows without changing membership or frozen order', () => {
+test('Active view never pulls rows out of Inactive, even when Active is short', () => {
   const state = {
     lastActivity: { c: 20, d: 80, e: 70, f: 60, g: 50, h: 40, i: 30, j: 10 },
     activeOrder: ['a', 'b'], inactiveOrder: ['c', 'd', 'e', 'f', 'g', 'h', 'i', 'j'],
@@ -236,7 +222,7 @@ test('only the Active view borrows up to eight rows without changing membership 
   assert.deepEqual(all.inactiveIds, state.inactiveOrder);
   assert.equal(all.showDivider, true);
   const active = selectSections(state, { view: 'active' });
-  assert.deepEqual(active.activeIds, ['a', 'b', 'd', 'e', 'f', 'g', 'h', 'i']);
+  assert.deepEqual(active.activeIds, ['a', 'b']);
   assert.deepEqual(active.inactiveIds, []);
   assert.equal(active.showDivider, false);
   assert.equal(JSON.stringify(state), before);
@@ -250,4 +236,22 @@ test('selectSections normalizes a bad view and a bad limit', () => {
   assert.deepEqual(picked.activeIds, ['a', 'b']);
   assert.deepEqual(picked.inactiveIds, ['c']);
   assert.equal(picked.showDivider, true);
+});
+
+test('deactivateSession moves one active row to the top of Inactive regardless of the floor', () => {
+  const state = { lastActivity: { a: 1, b: 2, c: 3 }, activeOrder: ['a', 'b'], inactiveOrder: ['c'] };
+  const next = deactivateSession(state, 'a');
+  assert.deepEqual(next.activeOrder, ['b']);
+  assert.deepEqual(next.inactiveOrder, ['a', 'c']);
+  assert.equal(deactivateSession(state, 'c'), state);
+  assert.equal(deactivateSession(state, 'zzz'), state);
+});
+
+test('demotion floor is twelve and a manually deactivated row is not pulled back', () => {
+  const ids = Array.from({ length: 14 }, (_, i) => 'r' + i);
+  const lastActivity = Object.fromEntries(ids.map((id, i) => [id, 100 - i]));
+  const state = { lastActivity, activeOrder: ids, inactiveOrder: [] };
+  const next = runDemotions(state, { now: 1e9 });
+  assert.equal(next.activeOrder.length, 12);
+  assert.equal(runDemotions({ ...state, activeOrder: ids.slice(0, 12) }, { now: 1e9 }).activeOrder.length, 12);
 });
