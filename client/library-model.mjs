@@ -1,6 +1,6 @@
 import { resolveSessionTitle } from './title-hints.mjs';
 
-export const CONFIG_DEFAULTS = Object.freeze({ sidebarLimit: 30, pageSize: 50, sidebarGrouping: 'folders', groupLimit: 5, libraryView: 'list', sidebarSessionHeight: 'auto', sectionView: 'all', deactivateOpacity: 30 });
+export const CONFIG_DEFAULTS = Object.freeze({ sidebarLimit: 30, pageSize: 50, sidebarGrouping: 'folders', groupLimit: 5, libraryView: 'list', sidebarSessionHeight: 'auto', sectionView: 'all', deactivateOpacity: 30, rowTightness: 0 });
 export function normalizeConfig(value) {
   const heightNumber = Number(value?.sidebarSessionHeight);
   return {
@@ -11,6 +11,7 @@ export function normalizeConfig(value) {
     libraryView: value?.libraryView === 'folders' ? 'folders' : 'list',
     sidebarSessionHeight: value?.sidebarSessionHeight === 'auto' || !Number.isFinite(heightNumber) ? 'auto' : Math.min(90, Math.max(20, Math.round(heightNumber))),
     sectionView: ['active', 'inactive', 'all'].includes(value?.sectionView) ? value.sectionView : 'all',
+    rowTightness: Number.isFinite(Number(value?.rowTightness)) && value?.rowTightness !== null && value?.rowTightness !== '' ? Math.min(100, Math.max(0, Math.round(Number(value.rowTightness)))) : 0,
     deactivateOpacity: Number.isFinite(Number(value?.deactivateOpacity)) && value?.deactivateOpacity !== null && value?.deactivateOpacity !== '' ? Math.min(100, Math.max(0, Math.round(Number(value.deactivateOpacity)))) : 30,
   };
 }

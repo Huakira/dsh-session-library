@@ -243,6 +243,9 @@ export function installLibrary(ctx, React) {
         h('input', { type: 'range', min: 20, max: 90, step: 5, value: typeof value.sidebarSessionHeight === 'number' ? value.sidebarSessionHeight : 65, onChange: e => setConfig({ sidebarSessionHeight: +e.target.value }), 'aria-label': text('会话区高度百分比', 'Session area height percentage'), title: value.sidebarSessionHeight === 'auto' ? text('当前为自适应；拖动即改为固定百分比', 'Currently Auto; drag to set a fixed percentage') : '', style: { accentColor: 'var(--dsw-focus-ring-color,#4c78a8)' } }),
         h('span', { style: { minWidth: '3em', textAlign: 'center' } }, value.sidebarSessionHeight === 'auto' ? '—' : `${value.sidebarSessionHeight}%`),
         button(text('自适应', 'Auto'), () => setConfig({ sidebarSessionHeight: 'auto' }), { 'aria-pressed': value.sidebarSessionHeight === 'auto', style: { fontSize: 12, padding: '3px 8px' } })),
+      h('label', null, text('会话行紧凑度（状态点、不活跃按钮、更多按钮的间距）', 'Row compactness (status dot, inactive and more buttons)'),
+        h('input', { type: 'range', min: 0, max: 100, step: 5, value: value.rowTightness, onChange: e => setConfig({ rowTightness: +e.target.value }), 'aria-label': text('会话行紧凑度', 'Row compactness'), style: { accentColor: 'var(--dsw-focus-ring-color,#4c78a8)' } }),
+        h('span', { style: { minWidth: '3em', textAlign: 'center' } }, `${value.rowTightness}%`)),
       h('label', null, text('「设为不活跃」按钮平时的不透明度', 'Resting opacity of the Make inactive button'),
         h('input', { type: 'range', min: 0, max: 100, step: 5, value: value.deactivateOpacity, onChange: e => setConfig({ deactivateOpacity: +e.target.value }), 'aria-label': text('不活跃按钮不透明度', 'Make inactive button opacity'), style: { accentColor: 'var(--dsw-focus-ring-color,#4c78a8)' } }),
         h('span', { style: { minWidth: '3em', textAlign: 'center' } }, `${value.deactivateOpacity}%`)),
@@ -578,6 +581,9 @@ export function installLibrary(ctx, React) {
   syncSidebarHeight();
   const syncDeactivateOpacity = () => document.documentElement.style.setProperty('--dsl-deact-opacity', String(config.deactivateOpacity / 100));
   syncDeactivateOpacity();
+  const syncTight = () => document.documentElement.style.setProperty('--dsl-tight', String(config.rowTightness / 100));
+  syncTight();
+  configListeners.add(syncTight);
   configListeners.add(syncDeactivateOpacity);
   configListeners.add(syncSidebarHeight);
   window.addEventListener('resize', syncSidebarHeight);

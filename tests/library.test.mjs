@@ -38,15 +38,15 @@ test('content search uses host hits only, keeps snippets as inert text',()=>{
  assert.equal(libraryRows(sessions,workspaces,{query:'正文',content:true}).length,0);
 });
 test('config normalizes unsupported values and caps DOM page sizes',()=>{
- assert.deepEqual(normalizeConfig({sidebarLimit:9999,pageSize:9999}),{sidebarLimit:100,pageSize:50,sidebarGrouping:'folders',groupLimit:5,libraryView:'list',sidebarSessionHeight:'auto',sectionView:'all',deactivateOpacity:30});
- assert.deepEqual(normalizeConfig({sidebarLimit:-1,pageSize:25}),{sidebarLimit:5,pageSize:25,sidebarGrouping:'folders',groupLimit:5,libraryView:'list',sidebarSessionHeight:'auto',sectionView:'all',deactivateOpacity:30});
- assert.deepEqual(normalizeConfig(null),{sidebarLimit:30,pageSize:50,sidebarGrouping:'folders',groupLimit:5,libraryView:'list',sidebarSessionHeight:'auto',sectionView:'all',deactivateOpacity:30});
- assert.deepEqual(normalizeConfig({sidebarGrouping:'projects',groupLimit:10,libraryView:'folders',sidebarSessionHeight:'auto',sectionView:'all',deactivateOpacity:30}),{sidebarLimit:30,pageSize:50,sidebarGrouping:'projects',groupLimit:10,libraryView:'folders',sidebarSessionHeight:'auto',sectionView:'all',deactivateOpacity:30});
- assert.deepEqual(normalizeConfig({sidebarGrouping:'bad',groupLimit:7,libraryView:'tree'}),{sidebarLimit:30,pageSize:50,sidebarGrouping:'folders',groupLimit:5,libraryView:'list',sidebarSessionHeight:'auto',sectionView:'all',deactivateOpacity:30});
- assert.deepEqual(normalizeConfig({sidebarSessionHeight:55}),{sidebarLimit:30,pageSize:50,sidebarGrouping:'folders',groupLimit:5,libraryView:'list',sidebarSessionHeight:55,sectionView:'all',deactivateOpacity:30});
- assert.deepEqual(normalizeConfig({sidebarSessionHeight:10}),{sidebarLimit:30,pageSize:50,sidebarGrouping:'folders',groupLimit:5,libraryView:'list',sidebarSessionHeight:20,sectionView:'all',deactivateOpacity:30});
- assert.deepEqual(normalizeConfig({sidebarSessionHeight:99}),{sidebarLimit:30,pageSize:50,sidebarGrouping:'folders',groupLimit:5,libraryView:'list',sidebarSessionHeight:90,sectionView:'all',deactivateOpacity:30});
- assert.deepEqual(normalizeConfig({sidebarSessionHeight:'max'}),{sidebarLimit:30,pageSize:50,sidebarGrouping:'folders',groupLimit:5,libraryView:'list',sidebarSessionHeight:'auto',sectionView:'all',deactivateOpacity:30});
+ assert.deepEqual(normalizeConfig({sidebarLimit:9999,pageSize:9999}),{sidebarLimit:100,pageSize:50,sidebarGrouping:'folders',groupLimit:5,libraryView:'list',sidebarSessionHeight:'auto',sectionView:'all',deactivateOpacity:30,rowTightness:0});
+ assert.deepEqual(normalizeConfig({sidebarLimit:-1,pageSize:25}),{sidebarLimit:5,pageSize:25,sidebarGrouping:'folders',groupLimit:5,libraryView:'list',sidebarSessionHeight:'auto',sectionView:'all',deactivateOpacity:30,rowTightness:0});
+ assert.deepEqual(normalizeConfig(null),{sidebarLimit:30,pageSize:50,sidebarGrouping:'folders',groupLimit:5,libraryView:'list',sidebarSessionHeight:'auto',sectionView:'all',deactivateOpacity:30,rowTightness:0});
+ assert.deepEqual(normalizeConfig({sidebarGrouping:'projects',groupLimit:10,libraryView:'folders',sidebarSessionHeight:'auto',sectionView:'all',deactivateOpacity:30,rowTightness:0}),{sidebarLimit:30,pageSize:50,sidebarGrouping:'projects',groupLimit:10,libraryView:'folders',sidebarSessionHeight:'auto',sectionView:'all',deactivateOpacity:30,rowTightness:0});
+ assert.deepEqual(normalizeConfig({sidebarGrouping:'bad',groupLimit:7,libraryView:'tree'}),{sidebarLimit:30,pageSize:50,sidebarGrouping:'folders',groupLimit:5,libraryView:'list',sidebarSessionHeight:'auto',sectionView:'all',deactivateOpacity:30,rowTightness:0});
+ assert.deepEqual(normalizeConfig({sidebarSessionHeight:55}),{sidebarLimit:30,pageSize:50,sidebarGrouping:'folders',groupLimit:5,libraryView:'list',sidebarSessionHeight:55,sectionView:'all',deactivateOpacity:30,rowTightness:0});
+ assert.deepEqual(normalizeConfig({sidebarSessionHeight:10}),{sidebarLimit:30,pageSize:50,sidebarGrouping:'folders',groupLimit:5,libraryView:'list',sidebarSessionHeight:20,sectionView:'all',deactivateOpacity:30,rowTightness:0});
+ assert.deepEqual(normalizeConfig({sidebarSessionHeight:99}),{sidebarLimit:30,pageSize:50,sidebarGrouping:'folders',groupLimit:5,libraryView:'list',sidebarSessionHeight:90,sectionView:'all',deactivateOpacity:30,rowTightness:0});
+ assert.deepEqual(normalizeConfig({sidebarSessionHeight:'max'}),{sidebarLimit:30,pageSize:50,sidebarGrouping:'folders',groupLimit:5,libraryView:'list',sidebarSessionHeight:'auto',sectionView:'all',deactivateOpacity:30,rowTightness:0});
 });
 test('folder view groups by folder first, then workspace, preserving order',()=>{
  const rows=[
