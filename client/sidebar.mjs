@@ -1,3 +1,5 @@
+import { resolveSessionTitle, getListTitleHints, subscribeListTitleHints } from './title-hints.mjs';
+import { readActiveCache, writeActiveCache } from './active-cache.mjs';
 import { createDirectoryPicker } from './directory-picker.mjs';
 import { projectSidebarList, groupSidebarRows, groupSectionRows, visibleSidebarGroupRows, eligibleSidebarRows } from './sidebar-model.mjs';
 import { normalizeSectionView, selectSections, SECTION_GROUP_CAP } from './section-model.mjs';
@@ -25,12 +27,26 @@ export function installSidebar(ctx, React, { openLibrary, useConfig, useFolders,
   function RecentSidebar(props) {
     const config = useConfig ? useConfig() : {};
     const folders = useFolders ? useFolders() : {};
-    const list = props.useSessions(state => state);
-    const workspace = props.useWorkspaces(state => state);
+    const titleHints = React.useSyncExternalStore(subscribeListTitleHints, getListTitleHints, getListTitleHints);
+    const liveList = props.useSessions(state => state);
+    const liveWorkspace = props.useWorkspaces(state => state);
     const statuses = props.useSessionStatus(state => state);
     const errored = (props.useSessionErrors ?? (() => new Set()))();
-    const sections = useSections ? useSections() : null;
+    const liveSections = useSections ? useSections() : null;
     const sectionView = normalizeSectionView(config?.sectionView);
+    const startupCache = React.useMemo(() => readActiveCache(typeof localStorage === 'undefined' ? undefined : localStorage), []);
+    const usingCache = liveList.phase !== 'ready' && startupCache !== null;
+    const list = usingCache ? startupCache.list : liveList;
+    const workspace = usingCache ? startupCache.workspace : liveWorkspace;
+    const sections = usingCache ? startupCache.sections : liveSections;
+    React.useEffect(() => {
+      if (usingCache && typeof performance !== 'undefined' && !performance.getEntriesByName('dsl-active-cache-visible').length) performance.mark('dsl-active-cache-visible');
+    }, [usingCache]);
+    React.useEffect(() => {
+      if (liveList.phase !== 'ready' || !liveSections) return;
+      const timer = setTimeout(() => writeActiveCache(typeof localStorage === 'undefined' ? undefined : localStorage, { list: liveList, workspace: liveWorkspace, sections: liveSections, limit: config?.sidebarLimit }), 250);
+      return () => clearTimeout(timer);
+    }, [liveList.ids, liveList.byId, liveList.phase, liveWorkspace, liveSections, config?.sidebarLimit, titleHints]);
     const [filter, setFilter] = React.useState('');
     // Typing stays immediate; grouping work defers so keystrokes never wait on it.
     const needle = React.useDeferredValue(filter.trim().toLocaleLowerCase());
@@ -82,14 +98,15 @@ export function installSidebar(ctx, React, { openLibrary, useConfig, useFolders,
     const seenPinned = React.useRef(null);
     const pinnedKey = eligible.pinnedIds.join('|');
     React.useEffect(() => {
+      if (usingCache || liveList.phase !== 'ready') { seenPinned.current = null; return; }
       const before = seenPinned.current;
       const current = new Set(eligible.pinnedIds);
       seenPinned.current = current;
       if (!before || !sectionActions) return;
       for (const id of current) if (!before.has(id)) sectionActions.activate(id);
-    }, [pinnedKey, sectionActions]);
+    }, [pinnedKey, sectionActions, usingCache, liveList.phase]);
 
-    const matchRow = row => ((row.displayTitle ?? row.title ?? '') + ' ' + row.id).toLocaleLowerCase().includes(needle);
+    const matchRow = row => (resolveSessionTitle(row) + ' ' + row.id).toLocaleLowerCase().includes(needle);
     const sectionData = React.useMemo(() => {
       if (!sections) return null;
       const picked = selectSections(sections, { view: sectionView, limit: config?.sidebarLimit, pinnedIds: eligible.pinnedIds });
@@ -100,15 +117,19 @@ export function installSidebar(ctx, React, { openLibrary, useConfig, useFolders,
         return built;
       };
       const activeGroups = build(picked.activeIds);
-      const inactiveGroups = build(picked.inactiveIds);
+      const inactiveGroups = usingCache && sectionView === 'all' ? [] : build(picked.inactiveIds);
       return { ...picked, activeGroups, inactiveGroups, showDivider: sectionView === 'all' && activeGroups.length > 0 && inactiveGroups.length > 0, pinnedRows: picked.pinnedIds.map(id => list.byId?.[id]).filter(row => row && (!needle || matchRow(row))) };
-    }, [sections, sectionView, config?.sidebarLimit, eligible, list.byId, workspace, folders, grouping, needle]);
+    }, [sections, sectionView, config?.sidebarLimit, eligible, list.byId, workspace, folders, grouping, needle, usingCache, titleHints]);
+    const displayedActive = sectionView === 'inactive' ? [] : (sectionData?.activeGroups ?? []).flatMap(group => group.rows.map(row => row.id));
+    React.useEffect(() => {
+      sectionActions?.setActiveDisplay?.(displayedActive, usingCache ? 'cached' : sectionView);
+    }, [displayedActive.join('|'), sectionView, usingCache, sectionActions]);
     const legacyGroups = React.useMemo(() => {
       if (sections) return null;
       const base = groupSidebarRows(list, projection.list, workspace, folders, grouping);
       if (!needle) return base;
       return base.map(group => ({ ...group, rows: group.rows.filter(matchRow), total: group.rows.filter(matchRow).length })).filter(group => group.rows.length > 0);
-    }, [sections, list, projection.list, workspace, folders, grouping, needle]);
+    }, [sections, list, projection.list, workspace, folders, grouping, needle, titleHints]);
     const [error, setError] = React.useState('');
     const [busy, setBusy] = React.useState(false);
     const [pickingDirectory, setPickingDirectory] = React.useState(false);
@@ -138,7 +159,7 @@ export function installSidebar(ctx, React, { openLibrary, useConfig, useFolders,
     };
     const menu = (event, row) => {
       event.preventDefault(); event.stopPropagation();
-      ctx.get('contextMenus')?.open({ kind: 'session', value: { sessionId: row.id, displayTitle: row.displayTitle ?? row.title ?? row.id } }, { x: event.clientX, y: event.clientY });
+      ctx.get('contextMenus')?.open({ kind: 'session', value: { sessionId: row.id, displayTitle: resolveSessionTitle(row) } }, { x: event.clientX, y: event.clientY });
     };
     const openWorkspaceMenu = (event, group) => {
       event.preventDefault(); event.stopPropagation();
@@ -161,7 +182,7 @@ export function installSidebar(ctx, React, { openLibrary, useConfig, useFolders,
       const state = statuses.get(row.id);
       const active = (row.retainedBy?.mainView ?? 0) > 0;
       const running = state?.running ?? row.running;
-      const label = row.blank ? text('新会话', 'New session') : row.displayTitle ?? row.title ?? row.id;
+      const label = row.blank ? text('新会话', 'New session') : resolveSessionTitle(row);
       const cwd = list.byId?.[row.id]?.cwd;
       const tip = [label, cwd ? abbreviate(cwd) : '无固定目录', row.createdAt ? `创建于 ${new Date(row.createdAt).toLocaleString()}（${relative(row.createdAt)}）` : ''].filter(Boolean).join('\n');
       // Colored status dot; error outranks attention, running, then unread replies.
@@ -262,7 +283,7 @@ export function installSidebar(ctx, React, { openLibrary, useConfig, useFolders,
           h('button', { type: 'button', onClick: () => workspaceRequest.set(null), style: { ...buttonStyle, fontSize: 12, flex: 1, border: '1px solid var(--dsw-alias-border-l2)', textAlign: 'center' } }, text('取消', 'Cancel')),
           h('button', { type: 'submit', disabled: busy, style: { ...buttonStyle, fontSize: 12, flex: 1, border: '1px solid var(--dsw-alias-border-l2)', textAlign: 'center' } }, busy ? text('保存中…', 'Saving…') : pendingWorkspace.action === 'rename' ? text('保存', 'Save') : text('确认删除', 'Delete')))),
       h('div', { style: { minHeight: 0, flex: 1, overflowY: 'auto' } },
-        (list.phase !== 'ready' || folders.loading) && h('div', { role: 'status', style: { padding: 8 } }, '正在加载会话…'),
+        (list.phase !== 'ready' || folders.loading) && h('div', { role: 'status', 'data-dsl-cache-loading': usingCache ? '' : undefined, style: { padding: 8, fontSize: 12 } }, usingCache ? text('已显示缓存，正在更新…', 'Showing cached sessions, updating…') : text('正在加载会话…', 'Loading sessions…')),
         list.phase === 'ready' && visibleGroupCount === 0 && h('div', { style: { padding: 8, fontSize: 12 } }, needle ? [
           text('没有匹配的最近会话。', 'No recent sessions match.'),
           h('button', { key: 'search-library', type: 'button', onClick: () => openLibrary({ kind: 'query', query: needle }), style: { ...buttonStyle, fontSize: 12, color: 'var(--dsw-alias-label-secondary)' } }, `在会话库中搜索“${needle}”`),

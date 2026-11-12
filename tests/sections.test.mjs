@@ -4,7 +4,7 @@ import {
   INACTIVITY_THRESHOLD, MIN_ACTIVE_COUNT, SECTION_GROUP_CAP,
   normalizeSectionView, emptySectionState, normalizeSectionState,
   reconcileSections, activateSession, refreshSession, removeSession,
-  runDemotions, selectSections,
+  runDemotions, selectSections, rememberActiveView,
 } from '../client/section-model.mjs';
 
 const NOW = 1_000_000;
@@ -79,10 +79,28 @@ test('activate moves a row to the very top and out of the inactive section', () 
   assert.equal(next.activeOrder.filter(id => id === 'g').length, 1);
   assert.equal(next.inactiveOrder.includes('g'), false);
   assert.equal(next.lastActivity.g, NOW);
-  // Activating an already-active row still just moves it to the top.
+  // An already-active row updates its clock without changing either order.
   const again = activateSession(next, 'b', NOW + 1);
-  assert.equal(again.activeOrder[0], 'b');
-  assert.equal(again.activeOrder.filter(id => id === 'b').length, 1);
+  assert.strictEqual(again.activeOrder, next.activeOrder);
+  assert.strictEqual(again.inactiveOrder, next.inactiveOrder);
+  assert.equal(again.lastActivity.b, NOW + 1);
+  const restarted = normalizeSectionState(JSON.parse(JSON.stringify(again)));
+  assert.deepEqual(activateSession(restarted, 'b', NOW + 2).activeOrder, again.activeOrder);
+  assert.equal(activateSession(again, 'b', NOW + 2, { forceTop: true }).activeOrder[0], 'b');
+});
+
+test('an inactive row already displayed in Active stays in its displayed position after sending and restarting', () => {
+  const initial = { lastActivity: { a: 90, b: 80, c: 70, d: 60, e: 50, f: 40, g: 30, h: 20, i: 10 }, activeOrder: ['a', 'b'], inactiveOrder: ['c', 'd', 'e', 'f', 'g', 'h', 'i'] };
+  const shown = selectSections(initial, { view: 'active' }).activeIds;
+  const remembered = rememberActiveView(initial, shown);
+  const next = activateSession(remembered, 'd', 100, { displayedActiveIds: shown });
+  assert.deepEqual(selectSections(next, { view: 'active' }).activeIds, shown);
+  assert.equal(next.inactiveOrder.includes('d'), false);
+  assert.deepEqual(selectSections(normalizeSectionState(JSON.parse(JSON.stringify(next))), { view: 'active' }).activeIds, shown);
+  const fromOutside = activateSession(next, 'i', 110, { displayedActiveIds: shown });
+  assert.equal(selectSections(fromOutside, { view: 'active' }).activeIds[0], 'i');
+  const withBlank = reconcileSections(next, [...initial.activeOrder, ...initial.inactiveOrder, 'new'], { now: 110, blankIds: ['new'] });
+  assert.equal(selectSections(withBlank, { view: 'active' }).activeIds[0], 'new');
 });
 
 test('refresh only advances the demotion clock; orders keep their identity', () => {

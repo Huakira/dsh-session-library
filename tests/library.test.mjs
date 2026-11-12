@@ -2,6 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { normalizeConfig, libraryRows, paginateRows, groupedLibraryRows, abbreviatePath } from '../client/library-model.mjs';
 import { groupSidebarRows } from '../client/sidebar-model.mjs';
+test('library search and labels read projection titles before directory fallbacks', () => {
+ const rows = {ids:['cold-title'],byId:{'cold-title':{id:'cold-title',displayTitle:'ungrouped',projectionValues:{title:'保留原标题'}}}};
+ const result = libraryRows(rows,{items:[]},{query:'原标题'});
+ assert.equal(result.length,1);
+ assert.equal(result[0].title,'保留原标题');
+});
 const sessions = { ids: Array.from({length:3188},(_,i)=>String(i)), byId: {} };
 for (const id of sessions.ids) sessions.byId[id] = {id,displayTitle:`历史会话 ${id}`,updatedAt:+id,cwd:'/work'};
 const workspaces = {items:[{workspaceId:'project',id:'project',title:'研究',sessionIds:['1','2']}],archivedSessionIds:['0','1'],pinnedSessionIds:['2']};

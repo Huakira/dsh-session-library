@@ -1,9 +1,10 @@
+import { getListTitleHints, subscribeListTitleHints } from './title-hints.mjs';
 import { installSidebarTooltips } from './tooltips.mjs';
 import { normalizeConfig, libraryRows, paginateRows, groupedLibraryRows } from './library-model.mjs';
 import { installSidebar } from './sidebar.mjs';
 import { createFolderStore } from './folders.mjs';
 import { installListCoalesce } from './list-coalesce.mjs';
-import { emptySectionState, normalizeSectionState, reconcileSections, activateSession, refreshSession, removeSession, runDemotions, DEMOTE_INTERVAL, INACTIVITY_THRESHOLD } from './section-model.mjs';
+import { emptySectionState, normalizeSectionState, reconcileSections, activateSession, refreshSession, removeSession, rememberActiveView, runDemotions, DEMOTE_INTERVAL, INACTIVITY_THRESHOLD } from './section-model.mjs';
 
 // Install at module scope (factory call), which precedes apply() and therefore
 // the boot-time session/list pair this coalesces.
@@ -112,7 +113,7 @@ export function installLibrary(ctx, React) {
   } catch { sectionState = emptySectionState(); }
   // React only re-renders when an ORDER changes. lastActivity ticks are silent:
   // they feed the demotion clock, not the visible layout.
-  let sectionSnapshot = { activeOrder: sectionState.activeOrder, inactiveOrder: sectionState.inactiveOrder, lastActivity: sectionState.lastActivity };
+  let sectionSnapshot = { ...sectionState };
   const sectionListeners = new Set();
   const subscribeSections = fn => { sectionListeners.add(fn); return () => sectionListeners.delete(fn); };
   const getSections = () => sectionSnapshot;
@@ -127,7 +128,7 @@ export function installLibrary(ctx, React) {
   };
   const publishSections = next => {
     sectionState = next;
-    sectionSnapshot = { activeOrder: next.activeOrder, inactiveOrder: next.inactiveOrder, lastActivity: next.lastActivity };
+    sectionSnapshot = { ...next };
     scheduleSectionPersist();
     for (const fn of sectionListeners) fn();
   };
@@ -135,6 +136,7 @@ export function installLibrary(ctx, React) {
   let caughtUp = false;
   let sectionPinnedIds = [];
   let sectionBlankIds = [];
+  let displayedActiveIds = [];
   const sectionActions = {
     reconcile: (ids, activityOf, pinnedIds = [], blankIds = []) => {
       sectionPinnedIds = pinnedIds;
@@ -168,7 +170,14 @@ export function installLibrary(ctx, React) {
       for (const id of runningIds) next = refreshSession(next, id, now);
       if (next !== sectionState) quietSections(next);
     },
-    activate: sessionId => publishSections(activateSession(sectionState, sessionId, Date.now())),
+    setActiveDisplay: (ids, view) => {
+      displayedActiveIds = ids;
+      if (view === 'active') {
+        const next = rememberActiveView(sectionState, ids);
+        if (next !== sectionState) publishSections(next);
+      }
+    },
+    activate: sessionId => publishSections(activateSession(sectionState, sessionId, Date.now(), { forceTop: true })),
     refresh: sessionId => quietSections(refreshSession(sectionState, sessionId, Date.now())),
     remove: sessionId => { const next = removeSession(sectionState, sessionId); if (next !== sectionState) publishSections(next); },
   };
@@ -179,7 +188,7 @@ export function installLibrary(ctx, React) {
       // emitted only for user/message events from the user.
       ctx.remote?.$on?.('api-session/activity', (sessionId, updatedAt) => {
         const at = Number(updatedAt);
-        publishSections(activateSession(sectionState, sessionId, Number.isFinite(at) && at > 0 ? Math.max(Date.now(), at) : Date.now()));
+        publishSections(activateSession(sectionState, sessionId, Number.isFinite(at) && at > 0 ? Math.max(Date.now(), at) : Date.now(), { displayedActiveIds }));
       }),
       ctx.remote?.$on?.('api-session/status', (sessionId, running) => {
         if (running) runningIds.add(sessionId); else runningIds.delete(sessionId);
@@ -235,13 +244,14 @@ export function installLibrary(ctx, React) {
       h('label', null, text('管理页每页条数', 'Sessions per page'),
         h('select', { value: value.pageSize, onChange: e => setConfig({ pageSize: +e.target.value }) },
           ...[25, 50, 100].map(n => h('option', { key: n, value: n }, n)))),
-      h('p', { className: 'dsl-hint' }, text('侧边栏顶部的「活跃 / 非活跃 / 全部」切换会话分区：15 分钟内有动作的会话留在活跃区（不超过 8 个时停止超时移出）；「全部」视图不补齐，「活跃」视图不足 8 条时临时补充显示最近的非活跃会话，不改变分区，其余按每分钟一次的节拍落到非活跃区顶部；发消息或置顶会把会话移到列表最顶部。区内顺序固定，只有激活和降级会移动会话，所以点开阅读或状态点变化都不会让列表跳动。置顶会话固定浮在最上方。会话区高度按侧栏总高的百分比调整：低于自然高度时收窄会话区（列表内部滚动）；高于自然高度时把上方面板逐个折进「更多」菜单（始终保留插件入口）。设置保存在此浏览器。', 'The Active / Inactive / All switch at the top of the sidebar controls the two sections: sessions with activity in the last 15 minutes stay Active (timeout demotion stops at 8 or fewer). All shows true section membership; Active alone borrows recent Inactive rows to show at least eight without changing membership, the rest drift to the top of Inactive on a one-minute beat. Sending a message or pinning moves a session to the very top of the list. Order inside a section is frozen — only activation and demotion move a row, so reading a session or a status-dot change never reshuffles the list. Pinned sessions always float above both sections. The session-area height is a percentage of the sidebar: below the natural height the session area shrinks (the list scrolls inside); above it, panel rows fold into the "More" menu one by one (the Plugins entry always stays). Settings are saved in this browser.')));
+      h('p', { className: 'dsl-hint' }, text('侧边栏顶部的「活跃 / 非活跃 / 全部」切换会话分区：15 分钟内有动作的会话留在活跃区（不超过 8 个时停止超时移出）；「全部」视图不补齐，「活跃」视图不足 8 条时临时补充显示最近的非活跃会话，不改变分区，其余按每分钟一次的节拍落到非活跃区顶部；新建会话或从当前活跃区之外重新启用的会话进入顶部；已经显示在活跃区的会话发消息只刷新时间，原位不动，补充显示的会话也一样。区内顺序固定，只有激活和降级会移动会话，所以点开阅读或状态点变化都不会让列表跳动。置顶会话固定浮在最上方。会话区高度按侧栏总高的百分比调整：低于自然高度时收窄会话区（列表内部滚动）；高于自然高度时把上方面板逐个折进「更多」菜单（始终保留插件入口）。设置保存在此浏览器。', 'The Active / Inactive / All switch at the top of the sidebar controls the two sections: sessions with activity in the last 15 minutes stay Active (timeout demotion stops at 8 or fewer). All shows true section membership; Active alone borrows recent Inactive rows to show at least eight without changing membership, the rest drift to the top of Inactive on a one-minute beat. New sessions and sessions reactivated from outside the displayed Active section move to the top. Sending in a session already displayed in Active keeps its position, including borrowed rows. Order inside a section is frozen — only activation and demotion move a row, so reading a session or a status-dot change never reshuffles the list. Pinned sessions always float above both sections. The session-area height is a percentage of the sidebar: below the natural height the session area shrinks (the list scrolls inside); above it, panel rows fold into the "More" menu one by one (the Plugins entry always stays). Settings are saved in this browser.')));
   }
   function Settings() {
     return h('section', { className: 'dsl-settings' }, h('h2', null, text('会话库', 'Session library')), h(Configuration),
       button(text('打开全部会话', 'Open all sessions'), openLibrary));
   }
   function Library({ useSessions, useWorkspaces }) {
+    const titleHints = React.useSyncExternalStore(subscribeListTitleHints, getListTitleHints, getListTitleHints);
     const sessions = useSessions(s => s), workspaces = useWorkspaces(s => s), cfg = useConfig(), folderState = useFolders();
     const [tab, setTab] = React.useState('all'), [query, setQuery] = React.useState(initialTarget?.kind === 'manage' ? initialTarget.row.id : initialTarget?.kind === 'query' ? initialTarget.query || '' : '');
     const deferredQuery = React.useDeferredValue(query);
@@ -312,7 +322,7 @@ export function installLibrary(ctx, React) {
     const validContentResult = searchResult.query === deferredQuery.trim() && searchResult.tab === tab && searchResult.filterKey === JSON.stringify([workspace, folderId]);
     const filtered = React.useMemo(() => libraryRows(sessions, workspaces,
       { tab, query: deferredQuery, workspace, folderId, sort, content }, content && validContentResult ? searchResult.items : [], folderState),
-      [sessions, workspaces, folderState, tab, deferredQuery, workspace, folderId, sort, content, validContentResult, searchResult]);
+      [sessions, workspaces, folderState, tab, deferredQuery, workspace, folderId, sort, content, validContentResult, searchResult, titleHints]);
     const trashRows = React.useMemo(() => trash.filter(row => !deferredQuery.trim() || [row.title || '', row.sessionId || '', row.trashId || ''].join(' ').toLowerCase().includes(deferredQuery.trim().toLowerCase())), [trash, deferredQuery]);
     const paged = paginateRows(tab === 'trash' ? trashRows : filtered, page, cfg.pageSize);
     async function view(row) {

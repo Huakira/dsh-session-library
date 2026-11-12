@@ -15,6 +15,8 @@
  * reconnects and manual refreshes correct.
  */
 
+import { captureSessionListTitles } from './title-hints.mjs';
+
 const LIST_PATH = 'api/session/list';
 const WINDOW_MS = 3000;
 const GUARD = '__dshSessionLibraryListCoalesce';
@@ -66,7 +68,9 @@ export function installListCoalesce(target) {
     const attempt = original.apply(this, args).then(async response => {
       const headers = {};
       for (const [key, value] of response.headers) headers[key] = value;
-      return { status: response.status, headers, text: await response.text() };
+      const text = await response.text();
+      captureSessionListTitles(text);
+      return { status: response.status, headers, text };
     });
     const slot = { at: now, promise: attempt };
     pending = slot;

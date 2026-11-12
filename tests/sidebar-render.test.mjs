@@ -10,7 +10,7 @@ import { installSidebar } from '../client/sidebar.mjs';
   const React = {
     createElement: (type, props, ...children) => ({ type, props: props ?? {}, children }),
     useMemo: fn => fn(), useState: v => [v, () => {}], useDeferredValue: v => v,
-    useRef: v => ({ current: v }), useEffect: fn => effects.push(fn),
+    useRef: v => ({ current: v }), useEffect: fn => effects.push(fn), useSyncExternalStore: (_sub, get) => get(),
   };
   const sections = { activeOrder: ['blank', 'a'], inactiveOrder: ['b'] };
   const calls = [];
@@ -49,7 +49,7 @@ test('section project groups render all thirty budgeted rows and collapse explic
   const values = []; let hook = 0;
   const React = {
     createElement: (type, props, ...children) => ({ type, props: props ?? {}, children }),
-    useMemo: fn => fn(), useDeferredValue: v => v, useRef: v => ({ current: v }), useEffect() {},
+    useMemo: fn => fn(), useDeferredValue: v => v, useRef: v => ({ current: v }), useEffect() {}, useSyncExternalStore: (_sub, get) => get(),
     useState: initial => { const i = hook++; if (!(i in values)) values[i] = initial; return [values[i], next => { values[i] = typeof next === 'function' ? next(values[i]) : next; }]; },
   };
   const ids = Array.from({ length: 40 }, (_, i) => `s${i}`);
@@ -94,6 +94,36 @@ test('three thousand catalog rows create only thirty recent row components and n
   flat.find(n => n.type === 'button' && n.props['aria-label'] === '全部会话').props.onClick();
   assert.equal(openedLibrary, 1);
   assert.equal(list.ids.length, 3188);
+});
+
+test('startup cache renders navigable active rows during loading and yields completely to ready live data', async t => {
+  const { writeActiveCache } = await import('../client/active-cache.mjs');
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+  const saved = new Map();
+  const storage = { getItem: key => saved.get(key) ?? null, setItem: (key, value) => saved.set(key, value) };
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: storage });
+  t.after(() => { if (descriptor) Object.defineProperty(globalThis, 'localStorage', descriptor); else delete globalThis.localStorage; });
+  const workspace = { items: [], pinnedSessionIds: [], archivedSessionIds: [] };
+  const sections = { activeOrder: ['cached'], inactiveOrder: [], lastActivity: { cached: Date.now() } };
+  assert.equal(writeActiveCache(storage, { list: { phase: 'ready', ids: ['cached'], byId: { cached: { id: 'cached', displayTitle: 'Cached title', cwd: '/project' } } }, workspace, sections }), true);
+  let Component;
+  let opened;
+  const React = { createElement: (type, props, ...children) => ({ type, props: props ?? {}, children }), useMemo: fn => fn(), useState: initial => [initial, () => {}], useDeferredValue: value => value, useEffect() {}, useRef: value => ({ current: value }), useSyncExternalStore: (_sub, get) => get() };
+  installSidebar({ slots: { inject: (_, cb) => cb(), register: (_, component) => { Component = component; } }, get: () => ({ openSession: id => { opened = id; } }) }, React, { openLibrary() {}, useConfig: () => ({ sidebarGrouping: 'recent', sectionView: 'all' }), useSections: () => sections, sectionActions: {} });
+  let live = { phase: 'loading', ids: [], byId: {} };
+  const props = { wide: true, useSessions: select => select(live), useWorkspaces: select => select(workspace), useSessionStatus: select => select(new Map()) };
+  const flatten = tree => { const nodes = []; const visit = node => { if (!node || typeof node !== 'object') return; nodes.push(node); for (const child of node.children ?? []) Array.isArray(child) ? child.forEach(visit) : visit(child); }; visit(tree); return nodes; };
+  let nodes = flatten(Component(props));
+  assert.equal(nodes.filter(node => node.props['data-dsl-session-row']).length, 1);
+  assert.ok(nodes.some(node => node.props['data-dsl-cache-loading'] === ''));
+  nodes.find(node => node.type === 'button' && node.props['aria-label'] === 'Cached title').props.onClick();
+  assert.equal(opened, 'cached');
+  live = { phase: 'ready', ids: ['cached'], byId: { cached: { id: 'cached', displayTitle: 'Updated live title' } } };
+  nodes = flatten(Component(props));
+  assert.ok(nodes.some(node => node.props['aria-label'] === 'Updated live title'));
+  assert.equal(nodes.some(node => node.props['data-dsl-cache-loading'] === ''), false);
+  live = { phase: 'ready', ids: [], byId: {} };
+  assert.equal(flatten(Component(props)).filter(node => node.props['data-dsl-session-row']).length, 0);
 });
 
 test('collapsing a group unmounts its rows; status dots mark running sessions', () => {

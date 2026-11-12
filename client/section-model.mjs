@@ -29,7 +29,7 @@ export function normalizeSectionState(value) {
   const activeOrder = unique(value.activeOrder);
   const seen = new Set(activeOrder);
   const inactiveOrder = unique(value.inactiveOrder).filter(id => !seen.has(id));
-  return { lastActivity, activeOrder, inactiveOrder };
+  return { lastActivity, activeOrder, inactiveOrder, ...(Array.isArray(value.activeViewOrder) ? { activeViewOrder: unique(value.activeViewOrder).filter(id => seen.has(id) || inactiveOrder.includes(id)) } : {}) };
 }
 
 /**
@@ -65,7 +65,7 @@ export function reconcileSections(state, catalogIds, { now = Date.now(), activit
   const fresh = ids.filter(id => !present.has(id));
   if (fresh.length === 0) {
     if (lastActivity === state.lastActivity && activeOrder.length === state.activeOrder.length && inactiveOrder.length === state.inactiveOrder.length) return state;
-    return { lastActivity, activeOrder, inactiveOrder };
+    return { ...state, lastActivity, activeOrder, inactiveOrder };
   }
   fresh.sort((a, b) => Number(blanks.has(b)) - Number(blanks.has(a)) || (lastActivity[b] - lastActivity[a]) || a.localeCompare(b));
   if (present.size === 0) {
@@ -77,17 +77,29 @@ export function reconcileSections(state, catalogIds, { now = Date.now(), activit
   } else {
     activeOrder = [...fresh, ...activeOrder];
   }
-  return { lastActivity, activeOrder, inactiveOrder };
+  return { ...state, lastActivity, activeOrder, inactiveOrder, ...(state.activeViewOrder ? { activeViewOrder: [...fresh, ...state.activeViewOrder.filter(id => known.has(id) && !fresh.includes(id))] } : {}) };
 }
 
-/** Only a user message or a pin activates: move that row to the very top. */
-export function activateSession(state, sessionId, now = Date.now()) {
+/** Keep an already displayed active row still; only an outside activation floats. */
+export function activateSession(state, sessionId, now = Date.now(), { displayedActiveIds = [], forceTop = false } = {}) {
   if (typeof sessionId !== 'string') return state;
+  const at = Math.max(state.lastActivity[sessionId] ?? 0, now);
+  if (!forceTop && state.activeOrder.includes(sessionId)) return refreshSession(state, sessionId, at);
+  const alreadyDisplayed = !forceTop && displayedActiveIds.includes(sessionId);
   return {
-    lastActivity: { ...state.lastActivity, [sessionId]: Math.max(state.lastActivity[sessionId] ?? 0, now) },
-    activeOrder: [sessionId, ...state.activeOrder.filter(id => id !== sessionId)],
+    ...state,
+    lastActivity: { ...state.lastActivity, [sessionId]: at },
+    activeOrder: alreadyDisplayed ? [...state.activeOrder, sessionId] : [sessionId, ...state.activeOrder.filter(id => id !== sessionId)],
     inactiveOrder: state.inactiveOrder.filter(id => id !== sessionId),
+    ...(state.activeViewOrder && !alreadyDisplayed ? { activeViewOrder: [sessionId, ...state.activeViewOrder.filter(id => id !== sessionId)] } : {}),
   };
+}
+
+/** Freeze the Active view too, including the inactive rows borrowed to fill eight. */
+export function rememberActiveView(state, ids) {
+  const order = [...new Set(ids)];
+  if (state.activeViewOrder?.length === order.length && order.every((id, i) => state.activeViewOrder[i] === id)) return state;
+  return { ...state, activeViewOrder: order };
 }
 
 /** Every other action only refreshes the demotion clock, never the order. */
@@ -103,6 +115,7 @@ export function removeSession(state, sessionId) {
   const lastActivity = { ...state.lastActivity };
   delete lastActivity[sessionId];
   return {
+    ...state,
     lastActivity,
     activeOrder: state.activeOrder.filter(id => id !== sessionId),
     inactiveOrder: state.inactiveOrder.filter(id => id !== sessionId),
@@ -131,6 +144,7 @@ export function runDemotions(state, { now = Date.now(), threshold = INACTIVITY_T
   demoted.sort((a, b) => (lastActivity[b] ?? 0) - (lastActivity[a] ?? 0) || a.localeCompare(b));
   const demotedSet = new Set(demoted);
   return {
+    ...state,
     lastActivity: state.lastActivity,
     activeOrder: state.activeOrder.filter(id => pinned.has(id) || keep.has(id)),
     inactiveOrder: [...demoted, ...state.inactiveOrder.filter(id => !demotedSet.has(id))],
@@ -153,8 +167,13 @@ export function selectSections(state, { view = 'all', limit = 30, pinnedIds = []
   // Borrow rows for display only, never move them between the persisted orders.
   if (mode === 'active' && activeRows.length < MIN_ACTIVE_COUNT) {
     const candidates = state.inactiveOrder.filter(id => !pinned.has(id));
-    if (state.lastActivity) candidates.sort((a, b) => (state.lastActivity[b] ?? 0) - (state.lastActivity[a] ?? 0));
+    const remembered = new Map((state.activeViewOrder ?? []).map((id, i) => [id, i]));
+    candidates.sort((a, b) => ((remembered.get(a) ?? Infinity) - (remembered.get(b) ?? Infinity)) || ((state.lastActivity?.[b] ?? 0) - (state.lastActivity?.[a] ?? 0)));
     activeRows.push(...candidates.slice(0, MIN_ACTIVE_COUNT - activeRows.length));
+  }
+  if (mode === 'active' && state.activeViewOrder) {
+    const rank = new Map(state.activeViewOrder.map((id, i) => [id, i]));
+    activeRows.sort((a, b) => (rank.get(a) ?? Infinity) - (rank.get(b) ?? Infinity));
   }
   const activeIds = activeRows.slice(0, budget);
   const inactiveIds = inactiveRows.slice(0, Math.max(0, budget - activeIds.length));

@@ -1,3 +1,5 @@
+import { resolveSessionTitle } from './title-hints.mjs';
+
 export const CONFIG_DEFAULTS = Object.freeze({ sidebarLimit: 30, pageSize: 50, sidebarGrouping: 'folders', groupLimit: 5, libraryView: 'list', sidebarSessionHeight: 'auto', sectionView: 'all' });
 export function normalizeConfig(value) {
   const heightNumber = Number(value?.sidebarSessionHeight);
@@ -34,7 +36,7 @@ export function libraryRows(sessions, workspaces, filters = {}, hits = [], folde
     const folderName = folderNames.get(folderId) || '';
     if (filters.folderId === '__none__' && folderId || filters.folderId && filters.folderId !== '__none__' && folderId !== filters.folderId) continue;
     if (filters.workspace && (workspace?.workspaceId || '__ungrouped__') !== filters.workspace) continue;
-    const title = s.displayTitle || s.title || id;
+    const title = resolveSessionTitle(s);
     if (query && (filters.content ? !snippets.has(id) : ![title, id, s.cwd || '', workspace?.title || '未分组', folderName].some(v => v.toLocaleLowerCase().includes(query)))) continue;
     rows.push({ id, title, folderId, folderName, cwd: s.cwd || '', workspace: workspace?.title || '未分组', workspaceId: workspace?.workspaceId || '__ungrouped__', archived: isArchived, pinned: pinned.has(id), running: !!s.running, updatedAt: s.updatedAt || 0, createdAt: s.createdAt || s.updatedAt || 0, snippet: snippets.get(id) || '' });
   }

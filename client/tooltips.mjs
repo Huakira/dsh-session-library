@@ -17,7 +17,7 @@ export function installSidebarTooltips(root = document) {
     tip.style.left = Math.max(4, Math.min(box.left, root.documentElement.clientWidth - tip.offsetWidth - 4)) + 'px';
     tip.style.top = Math.max(4, Math.min(box.bottom + 5, root.documentElement.clientHeight - tip.offsetHeight - 4)) + 'px';
   };
-  const over = event => { const next = find(event); if (!next || next === target) return; hide(); target = next; timer = setTimeout(() => show(next), 2000); };
+  const over = event => { const next = find(event); if (!next || next === target) return; hide(); target = next; timer = setTimeout(() => show(next), 600); };
   const out = event => { if (target && !target.contains(event.relatedTarget)) hide(); };
   const context = event => {
     const next = find(event);
