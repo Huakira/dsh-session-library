@@ -1,6 +1,6 @@
 import { getListTitleHints, subscribeListTitleHints } from './title-hints.mjs';
 import { installSidebarTooltips } from './tooltips.mjs';
-import { normalizeConfig, libraryRows, paginateRows, groupedLibraryRows } from './library-model.mjs';
+import { normalizeConfig, libraryRows, paginateRows, groupedLibraryRows, mergeVaultRows } from './library-model.mjs';
 import { installSidebar } from './sidebar.mjs';
 import { createFolderStore } from './folders.mjs';
 import { installListCoalesce } from './list-coalesce.mjs';
@@ -219,11 +219,46 @@ export function installLibrary(ctx, React) {
     else if (next !== sectionState) quietSections(next);
   }, DEMOTE_INTERVAL);
 
+  // 'session-library vault' — history vault reads on demand (library open, after restore/archive).
+  let vaultSnapshot = { items: [], invalidEntries: 0, loading: false };
+  let vaultLoading = false;
+  const vaultListeners = new Set();
+  const subscribeVault = listener => { vaultListeners.add(listener); return () => vaultListeners.delete(listener); };
+  const getVault = () => vaultSnapshot;
+  const publishVault = next => { vaultSnapshot = next; for (const listener of [...vaultListeners]) listener(); };
+  async function loadVault() {
+    if (vaultLoading) return;
+    vaultLoading = true;
+    publishVault({ ...vaultSnapshot, loading: true });
+    try {
+      const value = await request('vault/list');
+      publishVault({ items: value.items || [], invalidEntries: Number(value.invalidEntries) || 0, loading: false });
+    } catch { publishVault({ ...vaultSnapshot, loading: false }); }
+    finally { vaultLoading = false; }
+  }
+  const vaultActions = {
+    load: loadVault,
+    async restore(sessionId) {
+      const value = await request('vault/restore', { sessionId });
+      await ctx.sessions.refresh();
+      await loadVault();
+      return value;
+    },
+    async archive(sessionIds) {
+      const value = await request('vault/archive', { sessionIds });
+      await ctx.sessions.refresh();
+      await loadVault();
+      return value;
+    },
+  };
+  const useVault = () => React.useSyncExternalStore(subscribeVault, getVault, getVault);
+
   let disposed = false;
   const controllers = new Set();
   async function request(path, body = {}, signal) {
+    const confirmation = path === 'trash' ? 'trash-session' : path === 'restore-trash' ? 'restore-trash' : path === 'vault/archive' ? 'vault-archive' : path === 'vault/restore' ? 'vault-restore' : path === 'vault/migrate' ? 'vault-migrate' : '';
     const response = await fetch('/plugins/dsh-session-library/' + path, {
-      method: 'POST', headers: { 'content-type': 'application/json', 'x-dsh-session-library-confirmation': path === 'trash' ? 'trash-session' : 'restore-trash' },
+      method: 'POST', headers: { 'content-type': 'application/json', 'x-dsh-session-library-confirmation': confirmation },
       body: JSON.stringify(body), signal,
     });
     const result = await response.json();
@@ -260,7 +295,7 @@ export function installLibrary(ctx, React) {
   }
   function Library({ useSessions, useWorkspaces }) {
     const titleHints = React.useSyncExternalStore(subscribeListTitleHints, getListTitleHints, getListTitleHints);
-    const sessions = useSessions(s => s), workspaces = useWorkspaces(s => s), cfg = useConfig(), folderState = useFolders();
+    const sessions = useSessions(s => s), workspaces = useWorkspaces(s => s), cfg = useConfig(), folderState = useFolders(), vault = useVault();
     const [tab, setTab] = React.useState('all'), [query, setQuery] = React.useState(initialTarget?.kind === 'manage' ? initialTarget.row.id : initialTarget?.kind === 'query' ? initialTarget.query || '' : '');
     const deferredQuery = React.useDeferredValue(query);
     const [workspace, setWorkspace] = React.useState(initialTarget?.workspaceId || initialTarget?.value?.workspaceId || (initialTarget?.ungrouped || initialTarget?.value?.ungrouped ? '__ungrouped__' : '')), [sort, setSort] = React.useState('recent');
@@ -270,7 +305,7 @@ export function installLibrary(ctx, React) {
     const [page, setPage] = React.useState(0), [content, setContent] = React.useState(false);
     const [searchResult, setSearchResult] = React.useState({ query: '', items: [], hasMore: false, scanned: 0, total: 0, complete: true });
     const [searching, setSearching] = React.useState(false), [error, setError] = React.useState('');
-    const [busy, setBusy] = React.useState(false), [confirmation, setConfirmation] = React.useState(initialTarget?.kind === 'trash' ? initialTarget : null);
+    const [busy, setBusy] = React.useState(false), [confirmation, setConfirmation] = React.useState(initialTarget?.kind === 'trash' || initialTarget?.kind === 'vault-archive' ? initialTarget : null);
     const [trash, setTrash] = React.useState([]), [preview, setPreview] = React.useState(null);
     const [renameEditor, setRenameEditor] = React.useState(null);
     const [showConfig, setShowConfig] = React.useState(false);
@@ -281,6 +316,7 @@ export function installLibrary(ctx, React) {
       const el = dialog.current;
       el.showModal();
       void folderStore.refresh();
+      void loadVault();
       return () => { alive.current = false; searchRef.current?.abort(); previewRef.current?.abort(); if (el.open) el.close(); };
     }, []);
     React.useEffect(() => {
@@ -332,7 +368,8 @@ export function installLibrary(ctx, React) {
       { tab, query: deferredQuery, workspace, folderId, sort, content }, content && validContentResult ? searchResult.items : [], folderState),
       [sessions, workspaces, folderState, tab, deferredQuery, workspace, folderId, sort, content, validContentResult, searchResult, titleHints]);
     const trashRows = React.useMemo(() => trash.filter(row => !deferredQuery.trim() || [row.title || '', row.sessionId || '', row.trashId || ''].join(' ').toLowerCase().includes(deferredQuery.trim().toLowerCase())), [trash, deferredQuery]);
-    const paged = paginateRows(tab === 'trash' ? trashRows : filtered, page, cfg.pageSize);
+    const merged = React.useMemo(() => tab === 'all' && !content ? mergeVaultRows(filtered, vault.items, { query: deferredQuery, sort }) : filtered, [filtered, vault.items, tab, deferredQuery, sort, content]);
+    const paged = paginateRows(tab === 'trash' ? trashRows : merged, page, cfg.pageSize);
     async function view(row) {
       previewRef.current?.abort(); const abort = new AbortController(); previewRef.current = abort;
       setPreview({ row, loading: true }); setError('');
@@ -367,6 +404,7 @@ export function installLibrary(ctx, React) {
       return names.length ? `${base}：${names.join('、')}` : count > 1 ? `${count} 项${base}` : base;
     }
     function openRow(row) {
+      if (row.vaulted) { setConfirmation({ kind: 'vault-restore', row }); return; }
       if (row.archived) { void view(row); return; }
       sectionActions.activate(row.id);
       ctx.uiWorkspace.openSession(row.id); closeLibrary();
@@ -382,6 +420,11 @@ export function installLibrary(ctx, React) {
         } else if (target.kind === 'archive-stop') {
           await ctx.uiWorkspace.archiveSession(target.row.id, { stopActivity: true });
           await ctx.sessions.refresh();
+        } else if (target.kind === 'vault-restore') {
+          const restored = await vaultActions.restore(target.row.id);
+          if (alive.current && restored.cacheRestored === false) setError(text('会话记录已恢复，但标题缓存留在历史库中（同 ID 缓存已存在，不影响使用）。', 'Records restored, but the title cache stayed in the vault (a cache for this ID already exists; harmless).'));
+        } else if (target.kind === 'vault-archive') {
+          await vaultActions.archive([target.row.id]);
         } else {
           const restored = await request('restore-trash', { trashId: target.row.trashId });
           await ctx.sessions.refresh();
@@ -410,6 +453,8 @@ export function installLibrary(ctx, React) {
       });
     }
     function rowActions(row) {
+      if (row.vaulted) return h('div', { className: 'dsl-row-actions' },
+        button(text('恢复', 'Restore'), () => setConfirmation({ kind: 'vault-restore', row }), { disabled: busy }));
       return h('div', { className: 'dsl-row-actions' },
         !row.archived && button(text('打开', 'Open'), () => openRow(row), { disabled: busy }),
         button(text('重命名', 'Rename'), () => setRenameEditor({ row, name: row.title || '' }), { disabled: busy }),
@@ -480,12 +525,12 @@ export function installLibrary(ctx, React) {
           h('p', { className: 'dsl-hint' }, text('重命名后的标题不会再被自动标题覆盖。', 'A renamed title is pinned and will not be overwritten by auto-titling.')),
           h('div', { className: 'dsl-row-actions' }, button(text('取消', 'Cancel'), () => setRenameEditor(null), { disabled: busy, type: 'button' }), h('button', { type: 'submit', disabled: busy || !renameEditor.name.trim() }, busy ? text('保存中…', 'Saving…') : text('保存', 'Save'))))),
       confirmation && h('section', { className: 'dsl-confirm', role: 'alertdialog', 'aria-label': text('确认操作', 'Confirm action') },
-        h('strong', null, confirmation.kind === 'trash' ? text('移到回收站？', 'Move to trash?') : confirmation.kind === 'archive-stop' ? text('停止并归档此会话？', 'Stop and archive this session?') : text('恢复会话？', 'Restore session?')),
+        h('strong', null, confirmation.kind === 'trash' ? text('移到回收站？', 'Move to trash?') : confirmation.kind === 'archive-stop' ? text('停止并归档此会话？', 'Stop and archive this session?') : confirmation.kind === 'vault-archive' ? text('移入历史库？', 'Move to history vault?') : confirmation.kind === 'vault-restore' ? text('从历史库恢复？', 'Restore from history vault?') : text('恢复会话？', 'Restore session?')),
         h('p', null, confirmation.row.title || confirmation.row.sessionId),
         confirmation.kind === 'archive-stop' ? h(React.Fragment, null,
           h('p', { className: 'dsl-hint' }, text('“{title}”仍有正在进行的工作。归档会先停止这些工作；之后可在会话库恢复会话，被停止的工作不会自动继续。'.replace('{title}', confirmation.row.title || confirmation.row.id), `"${confirmation.row.title || confirmation.row.id}" still has ongoing work. Archiving stops it first; the session can be restored later from the library, but stopped work does not resume automatically.`)),
           h('p', { className: 'dsl-hint' }, text('将被停止的工作', 'Work that will be stopped')),
-          h('ul', { style: { margin: '4px 0', paddingLeft: 20, fontSize: 12 } }, ...confirmation.activity.map((item, index) => h('li', { key: index }, activityLine(item))))) : h('p', { className: 'dsl-hint' }, confirmation.kind === 'trash' ? text('会话记录将保留在服务器回收站。已加载、运行中或被占用的会话无法移入。', 'Records are retained in server trash. Loaded, running or locked sessions cannot be moved.') : text('将恢复会话记录和原有归档、置顶状态；同名会话已存在时会拒绝覆盖。', 'Restores records and prior archive/pin state. Existing sessions are never overwritten.')),
+          h('ul', { style: { margin: '4px 0', paddingLeft: 20, fontSize: 12 } }, ...confirmation.activity.map((item, index) => h('li', { key: index }, activityLine(item))))) : h('p', { className: 'dsl-hint' }, confirmation.kind === 'trash' ? text('会话记录将保留在服务器回收站。已加载、运行中或被占用的会话无法移入。', 'Records are retained in server trash. Loaded, running or locked sessions cannot be moved.') : confirmation.kind === 'vault-archive' ? text('会话将从会话列表移入服务器历史库，列表加载会更快；随时可在会话库“全部”里恢复并继续对话。', 'The session moves from the session list into the server history vault so the list loads faster; restore it any time from the library "All" tab to continue.') : confirmation.kind === 'vault-restore' ? text('将把会话从历史库放回会话列表，恢复后可继续对话。', 'Puts the session back from the history vault; the conversation continues after restore.') : text('将恢复会话记录和原有归档、置顶状态；同名会话已存在时会拒绝覆盖。', 'Restores records and prior archive/pin state. Existing sessions are never overwritten.')),
         h('div', { className: 'dsl-row-actions' }, button(text('取消', 'Cancel'), () => setConfirmation(null), { disabled: busy, autoFocus: true }), button(busy ? text('处理中…', 'Working…') : confirmation.kind === 'archive-stop' ? text('停止并归档', 'Stop and archive') : text('确认', 'Confirm'), () => void confirmAction(), { disabled: busy }))),
       preview ? h('div', { className: 'dsl-preview', 'aria-busy': !!preview.loading },
         preview.loading ? h('p', { role: 'status' }, text('正在读取…', 'Loading…')) : h(React.Fragment, null,
@@ -655,6 +700,7 @@ export function installLibrary(ctx, React) {
       return [
         ...(sectionActions.isActive(sessionId) && !pinned ? [{ id: 'deactivate', label: text('设为不活跃', 'Make inactive'), icon: { key: 'session-library.deactivate' }, run: () => sectionActions.deactivate(sessionId) }] : []),
         { id: 'library', label: text('在会话库中管理', 'Manage in session library'), icon: { key: 'session-library.manage' }, run: () => openLibrary({ kind: 'manage', row }) },
+        { id: 'vault', label: text('移入历史库', 'Move to history vault'), icon: { key: 'session-library.manage' }, run: () => openLibrary({ kind: 'vault-archive', row }) },
         { id: 'trash', label: text('移到回收站', 'Move to trash'), icon: { key: 'session-library.trash' }, danger: true, afterContent: true, run: () => openLibrary({ kind: 'trash', row }) },
       ];
     },

@@ -46,6 +46,22 @@ export function libraryRows(sessions, workspaces, filters = {}, hits = [], folde
   rows.sort((a, b) => sort === 'title' ? a.title.localeCompare(b.title) || a.id.localeCompare(b.id) : (sort === 'oldest' ? a.updatedAt - b.updatedAt : b.updatedAt - a.updatedAt) || a.id.localeCompare(b.id));
   return rows;
 }
+/** Merge history-vault rows into library rows for the "all" tab (lastActivity desc; title sort keeps own rows first). */
+export function mergeVaultRows(ownRows, vaultItems = [], { query = '', sort = 'recent' } = {}) {
+  const needle = String(query || '').trim().toLocaleLowerCase();
+  const vaultRows = (vaultItems || [])
+    .filter(item => item && item.id && !item.missing)
+    .map(item => ({
+      id: item.id, title: item.title || item.id, folderId: '', folderName: '', cwd: item.cwd || '',
+      workspace: '历史库', workspaceId: '__vault__', archived: true, pinned: false, running: false,
+      updatedAt: item.lastActivity || item.vaultedAt || 0, createdAt: item.createdAt || 0,
+      vaulted: true, unindexed: !!item.unindexed,
+    }))
+    .filter(row => !needle || [row.title, row.id, row.cwd].some(value => String(value).toLocaleLowerCase().includes(needle)));
+  const own = [...(ownRows || [])];
+  if (sort === 'title') return [...own, ...vaultRows];
+  return [...own, ...vaultRows].sort((a, b) => (b.updatedAt - a.updatedAt) || a.id.localeCompare(b.id));
+}
 export function paginateRows(rows, page, size) {
   const pageSize = [25, 50, 100].includes(Number(size)) ? Number(size) : 50;
   const pages = Math.max(1, Math.ceil(rows.length / pageSize));

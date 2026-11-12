@@ -115,3 +115,34 @@ test('reading a session or clearing its unread dot never moves any row',()=>{
  sessions.byId['oldest'].updatedAt=400;
  assert.deepEqual(order(),['oldest','new-idle','older-busy']);
 });
+// mergeVaultRows: history vault rows merge into the "all" tab
+{
+  const { mergeVaultRows } = await import('../client/library-model.mjs');
+  const own = [
+    { id: 's1', title: 'Own recent', updatedAt: 500, createdAt: 400 },
+    { id: 's2', title: 'Own older', updatedAt: 100, createdAt: 90 },
+  ];
+  const vaultItems = [
+    { id: 'v1', title: 'Vault new', cwd: '/x', lastActivity: 800, createdAt: 700 },
+    { id: 'v2', title: 'Vault old', cwd: '/y', lastActivity: 50, createdAt: 40 },
+    { id: 'v3', title: 'Missing on disk', cwd: '/z', lastActivity: 900, missing: true },
+  ];
+  test('mergeVaultRows merges by lastActivity and drops missing vault entries', () => {
+    const merged = mergeVaultRows(own, vaultItems, {});
+    assert.deepEqual(merged.map(row => row.id), ['v1', 's1', 's2', 'v2']);
+    const vaultRow = merged.find(row => row.id === 'v1');
+    assert.equal(vaultRow.workspace, '历史库');
+    assert.equal(vaultRow.vaulted, true);
+    assert.equal(vaultRow.archived, true);
+    assert.ok(!merged.some(row => row.id === 'v3'), 'missing entry excluded');
+  });
+  test('mergeVaultRows filters vault rows by query and keeps title sort order', () => {
+    const merged = mergeVaultRows([], vaultItems, { query: 'vault', sort: 'title' });
+    assert.deepEqual(merged.map(row => row.id), ['v1', 'v2']);
+    assert.ok(merged.every(row => row.vaulted), 'query only matched vault rows');
+  });
+  test('mergeVaultRows tolerates empty inputs', () => {
+    assert.deepEqual(mergeVaultRows([], [], {}), []);
+    assert.deepEqual(mergeVaultRows(undefined, undefined, {}), []);
+  });
+}

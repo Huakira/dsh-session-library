@@ -1,8 +1,9 @@
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 import { createArchiveRequestHandlers, searchArchivedSessions } from './archive-manager.mjs'
 import { hostRequestFence } from './request-fence.mjs'
-import { createLibraryRequestHandlers } from './routes.mjs'
+import { createLibraryRequestHandlers, createVaultRequestHandlers } from './routes.mjs'
 import { listTrash, restoreTrashSafely, trashSessionSafely } from './trash-session.mjs'
+import { vaultArchiveSession, vaultList, vaultMigrateSessions, vaultRestoreSession } from './vault.mjs'
 import { previewSession } from './preview.mjs'
 import { turnOutcomes } from './turn-outcome.mjs'
 import { createContentSearch, createContentSearchHandler } from './search.mjs'
@@ -48,9 +49,29 @@ export function apply(ctx, config = {}) {
     preview: (sessionId, signal) => previewSession(queryDeps(), sessionId, signal),
     turnOutcomes: sessionIds => turnOutcomes(queryDeps(), sessionIds),
   })
+  const vaultHandlers = createVaultRequestHandlers({
+    isTrustedRequest,
+    list: () => vaultList(options),
+    archive: async sessionIds => {
+      const results = []
+      for (const sessionId of sessionIds) {
+        const result = await vaultArchiveSession(deps, { ...options, sessionId })
+        results.push(result)
+      }
+      const failures = results.filter(result => result?.ok !== true)
+      if (results.length === 1) return results[0]
+      return failures.length === 0
+        ? { ok: true, value: { archived: results.length } }
+        : { ok: false, error: { code: failures[0]?.error?.code ?? 'vault-archive-failed', message: `${failures.length}/${results.length} 个会话未能移入历史库；其余保持不变。` }, value: { results } }
+    },
+    migrate: params => vaultMigrateSessions(deps, options, params),
+    restore: sessionId => vaultRestoreSession(deps, { ...options, sessionId }),
+  })
   for (const [path, handler] of [
     ['search', searchHandler], ['archive-search', archive.search], ['trash', handlers.trash],
     ['trash-list', handlers.list], ['restore-trash', handlers.restore], ['preview', handlers.preview], ['turn-outcomes', handlers.turnOutcomes],
+    ['vault/list', vaultHandlers.list], ['vault/archive', vaultHandlers.archive],
+    ['vault/migrate', vaultHandlers.migrate], ['vault/restore', vaultHandlers.restore],
     ...Object.entries(folderHandlers).map(([action, handler]) => [`folders/${action}`, handler]),
   ]) {
     ctx.effect(() => ctx.webServer.register({ kind: 'exact', path: `/plugins/dsh-session-library/${path}`, handler }), `dsh-session-library: ${path}`)
@@ -58,5 +79,6 @@ export function apply(ctx, config = {}) {
 }
 
 export { createFolderStore, createFolderRequestHandlers, createContentSearch, createContentSearchHandler, hostRequestFence, createLibraryRequestHandlers, listTrash, restoreTrashSafely, trashSessionSafely, previewSession }
+export { vaultArchiveSession, vaultList, vaultMigrateSessions, vaultRestoreSession } from './vault.mjs'
 export { createArchiveRequestHandlers, searchArchivedSessions, restoreArchivedSession, reconcileDeletedArchive } from './archive-manager.mjs'
 export { turnOutcomes } from './turn-outcome.mjs'
