@@ -1,5 +1,5 @@
 {
-  "name": "dsh-session-library",
+  "name": "@huakira/session-library",
   "version": "0.3.0",
   "description": "Lightweight recent-session sidebar and a searchable, paginated session library with unified live+vault search and recoverable cleanup for DSH",
   "type": "module",
@@ -44,5 +44,21 @@
     "build": "node scripts/build.mjs",
     "test": "node --test tests/*.test.mjs",
     "check": "npm test && npm run build"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Huakira/dsh-session-library.git"
+  },
+  "author": {
+    "name": "Huakira",
+    "email": "huakexie@proton.me"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness"
+  ]
 }
