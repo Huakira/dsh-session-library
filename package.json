@@ -1,5 +1,5 @@
 {
-  "name": "@huakira/session-library",
+  "name": "@huakirax/session-library",
   "version": "0.3.0",
   "description": "Lightweight recent-session sidebar and a searchable, paginated session library with unified live+vault search and recoverable cleanup for DSH",
   "type": "module",
