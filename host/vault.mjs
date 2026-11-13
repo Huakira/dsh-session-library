@@ -56,7 +56,7 @@ function projectionName(id) {
 // The projection cache stays with the session: moving it away keeps the
 // shared projection root free of records for sessions DSH cannot list, and
 // moving it back restores titles and list metadata without recomputation.
-async function readProjection(projectionRoot, id) {
+export async function readProjection(projectionRoot, id) {
   const path = join(projectionRoot, projectionName(id))
   try {
     const info = await lstat(path, { bigint: true })
