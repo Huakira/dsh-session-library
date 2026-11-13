@@ -164,7 +164,7 @@ test('collapsing a group unmounts its rows; status dots mark running sessions', 
   assert.equal(render().filter(n => n.props['data-dsl-session-row']).length, 5);
 });
 
-test('unread dots survive a simulated restart and clear on viewing or running', () => {
+test('unread dots come from the durable store, survive a reload and clear on viewing', () => {
   let Component;
   const refSlots = new Map();
   let refIndex = 0;
@@ -175,43 +175,50 @@ test('unread dots survive a simulated restart and clear on viewing or running', 
     useEffect: fn => { fn(); }, useSyncExternalStore: (_sub, get) => get(),
   };
   const sections = { activeOrder: ['up1', 'up2'], inactiveOrder: [] };
+  // Stand-in for client/unread-store.mjs: the host-backed map plus the two
+  // actions the sidebar calls. A "reload" keeps this object, a restart keeps
+  // its localStorage cache — either way the ids stay until read.
+  const durable = new Map();
+  const marked = [], read = [];
+  const unread = {
+    subscribe: () => () => {},
+    getSnapshot: () => new Map(durable),
+    has: id => durable.has(id),
+    mark: id => { marked.push(id); durable.set(id, 1); },
+    read: id => { read.push(id); durable.delete(id); },
+  };
   installSidebar({ slots: { inject: (_, cb) => cb(), register: (_, comp) => { Component = comp; return () => {}; } } }, React, {
-    openLibrary() {}, useConfig: () => ({ sidebarLimit: 30, sidebarGrouping: 'recent', sectionView: 'all' }), useSections: () => sections,
+    unread, openLibrary() {}, useConfig: () => ({ sidebarLimit: 30, sidebarGrouping: 'recent', sectionView: 'all' }), useSections: () => sections,
     sectionActions: { reconcile() {}, setRunning() {}, refresh() {}, activate() {} },
   });
   const mkList = retained => ({ ids: ['up1', 'up2'], phase: 'ready', byId: Object.fromEntries(['up1', 'up2'].map(id => [id, { id, displayTitle: id, updatedAt: 1, retainedBy: retained(id) }])) });
-  const props = statuses => ({ wide: true, useSessions: select => select(mkList(() => ({}))), useWorkspaces: select => select({}), useSessionStatus: select => select(statuses) });
+  const props = (statuses, retained = () => ({})) => ({ wide: true, useSessions: select => select(mkList(retained)), useWorkspaces: select => select({}), useSessionStatus: select => select(statuses) });
   const flatten = tree => { const all = []; const walk = node => { if (!node || typeof node !== 'object') return; all.push(node); for (const child of node.children ?? []) Array.isArray(child) ? child.forEach(walk) : walk(child); }; walk(tree); return all; };
   const dotOf = (all, id) => { const row = all.find(n => n.props['data-dsl-session-row'] === id); const span = row.children[0].children.find(c => c && c.props && c.props['data-dsl-status'] !== undefined); return span.children[0] ? span.children[0].props.className : null; };
   const mounted = p => { refIndex = 0; return flatten(Component(p)); };
 
-  // While unread is live in the host map the dot shows and is remembered.
-  // The remember hook only fires on a transition, so establish the baseline first.
+  // A live completion marks the durable store (neither row is displayed here).
   let statuses = new Map();
   let all = mounted(props(statuses));
   statuses = new Map([['up1', { completionUnread: true }], ['up2', { completionUnread: true }]]);
   all = mounted(props(statuses));
+  assert.deepEqual(marked, ['up1', 'up2']);
   assert.equal(dotOf(all, 'up1'), 'dsl-status-dot dsl-status-done');
 
-  // Simulated restart: the host map comes back empty, the dot must survive.
-  statuses = new Map();
-  all = mounted(props(statuses));
+  // Reload: the host's in-memory map is empty again, the store still answers.
+  all = mounted(props(new Map()));
   assert.equal(dotOf(all, 'up1'), 'dsl-status-dot dsl-status-done');
   assert.equal(dotOf(all, 'up2'), 'dsl-status-dot dsl-status-done');
 
-  // Viewing the row clears the remembered marker (host rule, plugin persisted).
-  statuses = new Map();
-  all = mounted(props(statuses));
-  const viewing = { ids: ['up1', 'up2'], phase: 'ready', byId: { up1: { id: 'up1', displayTitle: 'up1', updatedAt: 1, retainedBy: { mainView: 1 } }, up2: { id: 'up2', displayTitle: 'up2', updatedAt: 1, retainedBy: {} } } };
-  all = mounted({ ...props(statuses), useSessions: select => select(viewing) });
+  // Viewing a row clears its mark for every client; the other one stays.
+  all = mounted(props(new Map(), id => id === 'up1' ? { mainView: 1 } : {}));
+  assert.deepEqual(read, ['up1']);
   assert.equal(dotOf(all, 'up1'), null);
   assert.equal(dotOf(all, 'up2'), 'dsl-status-dot dsl-status-done');
 
-  // A session that starts running clears its unread marker too.
-  statuses = new Map([['up2', { running: true }]]);
-  all = mounted(props(statuses));
+  // A running session shows the spinner dot; the unread mark is not lost.
+  all = mounted(props(new Map([['up2', { running: true }]])));
   assert.equal(dotOf(all, 'up2'), 'dsl-status-dot dsl-status-running');
-  statuses = new Map([['up2', { running: false }]]);
-  all = mounted(props(statuses));
-  assert.equal(dotOf(all, 'up2'), null);
+  all = mounted(props(new Map([['up2', { running: false }]])));
+  assert.equal(dotOf(all, 'up2'), 'dsl-status-dot dsl-status-done');
 });

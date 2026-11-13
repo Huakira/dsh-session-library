@@ -6,38 +6,8 @@ import { normalizeSectionView, selectSections, SECTION_GROUP_CAP } from './secti
 
 const SIDEBAR_SLOT = 'sidebar.workspaces';
 
-// The host clears every in-memory completionUnread on restart, so replies that
-// landed while a tab was disconnected never light up again. Keep the ids we
-// observed unread in localStorage and restore the dots after a reload; opening
-// the session clears them exactly like the host's own rule.
-const UNREAD_KEY = 'dsh-session-library.unread.v1';
-const UNREAD_LIMIT = 50;
-const UNREAD_TTL = 7 * 24 * 60 * 60 * 1000;
-const unreadPersist = (() => {
-  const map = new Map();
-  try {
-    if (typeof localStorage !== 'undefined') {
-      const stored = JSON.parse(localStorage.getItem(UNREAD_KEY) || '[]');
-      const now = Date.now();
-      for (const [id, at] of Array.isArray(stored) ? stored : []) {
-        if (typeof id === 'string' && Number.isFinite(at) && now - at < UNREAD_TTL) map.set(id, at);
-      }
-      while (map.size > UNREAD_LIMIT) map.delete(map.keys().next().value);
-    }
-  } catch { /* corrupted state simply starts empty */ }
-  return map;
-})();
-const saveUnreadPersist = () => {
-  try {
-    if (typeof localStorage === 'undefined') return;
-    localStorage.setItem(UNREAD_KEY, JSON.stringify([...unreadPersist]));
-  } catch { /* best effort */ }
-};
-const rememberUnread = id => { if (!unreadPersist.has(id)) { unreadPersist.set(id, Date.now()); while (unreadPersist.size > UNREAD_LIMIT) unreadPersist.delete(unreadPersist.keys().next().value); saveUnreadPersist(); } };
-const forgetUnread = id => { if (unreadPersist.delete(id)) saveUnreadPersist(); };
-
 /** Replace only the public browsing region; dispose reveals the official region. */
-export function installSidebar(ctx, React, { openLibrary, useConfig, useFolders, folderActions = {}, onConfigChange, workspaceRequest, useSessionErrors, useSections, sectionActions }) {
+export function installSidebar(ctx, React, { unread, openLibrary, useConfig, useFolders, folderActions = {}, onConfigChange, workspaceRequest, useSessionErrors, useSections, sectionActions }) {
   const h = React.createElement;
   const DirectoryPicker = createDirectoryPicker(React);
   const text = (zh, en) => ctx.locale?.getSnapshot?.().active === 'zh' ? zh : en;
@@ -61,6 +31,8 @@ export function installSidebar(ctx, React, { openLibrary, useConfig, useFolders,
     const liveList = props.useSessions(state => state);
     const liveWorkspace = props.useWorkspaces(state => state);
     const statuses = props.useSessionStatus(state => state);
+    // Durable unread ids kept by the host; the snapshot is stable between updates.
+    const unreadIds = unread ? React.useSyncExternalStore(unread.subscribe, unread.getSnapshot, unread.getSnapshot) : null;
     const errored = (props.useSessionErrors ?? (() => new Set()))();
     const liveSections = useSections ? useSections() : null;
     const sectionView = normalizeSectionView(config?.sectionView);
@@ -120,13 +92,12 @@ export function installSidebar(ctx, React, { openLibrary, useConfig, useFolders,
       if (!before || !sectionActions) return;
       for (const [id, next] of current) {
         const prev = before.get(id) ?? {};
-        // Only the host actively clearing the marker (flag flipped off or the
-        // session running again) forgets it; an entry vanishing wholesale means
-        // the map was rebuilt — e.g. after a reload — and the persisted marker
-        // must survive that.
-        if (next.completionUnread && !prev.completionUnread) rememberUnread(id);
-        if (prev.completionUnread && next.completionUnread === false) forgetUnread(id);
-        if (next.running && !prev.running) forgetUnread(id);
+        // A finished turn becomes unread on the host, unless this client is the
+        // one displaying the session — then viewing it clears the mark for all.
+        if (next.completionUnread && !prev.completionUnread && unread) {
+          if ((liveList.byId?.[id]?.retainedBy?.mainView ?? 0) > 0) unread.read(id);
+          else unread.mark(id);
+        }
         if ((!prev.running && next.running) || (!prev.pendingInteraction && next.pendingInteraction) || (!prev.completionUnread && next.completionUnread) || (prev.completionUnread && !next.completionUnread)) sectionActions.refresh(id);
       }
     }, [statuses, sectionActions]);
@@ -239,11 +210,11 @@ export function installSidebar(ctx, React, { openLibrary, useConfig, useFolders,
       const cwd = list.byId?.[row.id]?.cwd;
       const tip = [label, cwd ? abbreviate(cwd) : '无固定目录', row.createdAt ? `创建于 ${new Date(row.createdAt).toLocaleString()}（${relative(row.createdAt)}）` : ''].filter(Boolean).join('\n');
       // Colored status dot; error outranks attention, running, then unread replies.
-      if (active) forgetUnread(row.id); // viewing the reply clears the unread marker, host rule included
+      if (active) unread?.read(row.id); // viewing the reply clears the host's mark for every client
       const dot = errored.has(row.id) ? h('span', { className: 'dsl-status-dot dsl-status-error', role: 'img', 'aria-label': '出错', 'data-dsl-tip': '会话出错' })
         : state?.pendingInteraction ? h('span', { className: 'dsl-status-dot dsl-status-attention', role: 'img', 'aria-label': '需要你处理', 'data-dsl-tip': `需要你处理（${state.pendingInteraction.kind || 'interaction'}）` })
         : running ? h('span', { className: 'dsl-status-dot dsl-status-running', role: 'img', 'aria-label': '正在运行', 'data-dsl-tip': '正在运行' })
-        : state?.completionUnread || unreadPersist.has(row.id) ? h('span', { className: 'dsl-status-dot dsl-status-done', role: 'img', 'aria-label': '有新回复', 'data-dsl-tip': '有新回复' })
+        : !active && (state?.completionUnread || unreadIds?.has(row.id)) ? h('span', { className: 'dsl-status-dot dsl-status-done', role: 'img', 'aria-label': '有新回复', 'data-dsl-tip': '有新回复' })
         : null; // idle: no dot, only the fixed-size placeholder keeps the label from shifting
       return h('div', { key: row.id, 'data-dsl-session-row': row.id, onContextMenu: event => menu(event, row), style: { display: 'flex', alignItems: 'center', minWidth: 0, borderRadius: 'var(--dsw-radius-md)', background: active ? 'var(--dsw-alias-interactive-bg-hover)' : 'transparent' } },
         h('button', { type: 'button', 'data-dsl-tip': tip, 'aria-label': label, 'aria-current': active ? 'page' : undefined, onClick: () => open(row), style: { ...buttonStyle, padding: '7px 9px', display: 'flex', alignItems: 'center', gap: 6, flex: 1, minWidth: 0 } },

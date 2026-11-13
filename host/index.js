@@ -10,6 +10,7 @@ import { turnOutcomes } from './turn-outcome.mjs'
 import { createContentSearch, createContentSearchHandler } from './search.mjs'
 import { createFolderStore, createFolderRequestHandlers } from './folders.mjs'
 import { createSectionStore, createSectionRequestHandlers } from './sections.mjs'
+import { createUnreadStore, createUnreadRequestHandlers } from './unread.mjs'
 import { createDocumentReader } from './documents.mjs'
 import { createVaultTools, createVaultTranscriptReader, VAULT_PROMPT_TEXT } from './tools.mjs'
 
@@ -35,6 +36,21 @@ export function apply(ctx, config = {}) {
   const queryDeps = () => ({ workspaceRegistry: ctx.workspaceRegistry, sessionQuery: ctx.get('sessionQuery'), readDocuments, getFolderSnapshot: () => folderStore.list() })
   const folderHandlers = createFolderRequestHandlers({ isTrustedRequest, store: folderStore })
   const sectionHandlers = createSectionRequestHandlers({ isTrustedRequest, store: createSectionStore({ dshHome: options.dshHome }) })
+  // Durable completion-unread state, shared by every browser and surviving a
+  // restart. The host marks on `turn/end`, clients read through `/unread/*`.
+  const unreadStore = createUnreadStore({ dshHome: options.dshHome })
+  const unreadHandlers = createUnreadRequestHandlers({ isTrustedRequest, store: unreadStore })
+  ctx.effect(() => {
+    const off = ctx.on?.('session/event', (session, event) => {
+      const sessionId = session?.id
+      if (event?.type !== 'turn/end' || typeof sessionId !== 'string') return
+      // Subagent children never appear in the sidebar; marking them would only
+      // crowd the store. `delegationDepth` lives on the session header.
+      if ((session?.header?.delegationDepth ?? 0) > 0) return
+      void unreadStore.mark({ entries: [{ sessionId, at: Date.now() }] }).catch(() => {})
+    }, { global: true })
+    return () => { try { off?.() } catch { /* already disposed */ } }
+  }, 'dsh-session-library: unread marks')
   const searchHandler = createContentSearchHandler({ isTrustedRequest, search: createContentSearch(queryDeps) })
   const archive = createArchiveRequestHandlers({
     isTrustedRequest,
@@ -99,12 +115,14 @@ export function apply(ctx, config = {}) {
     ['vault/migrate', vaultHandlers.migrate], ['vault/restore', vaultHandlers.restore],
     ...Object.entries(folderHandlers).map(([action, handler]) => [`folders/${action}`, handler]),
     ...Object.entries(sectionHandlers).map(([action, handler]) => [`sections/${action}`, handler]),
+    ...Object.entries(unreadHandlers).map(([action, handler]) => [`unread/${action}`, handler]),
   ]) {
     ctx.effect(() => ctx.webServer.register({ kind: 'exact', path: `/plugins/dsh-session-library/${path}`, handler }), `dsh-session-library: ${path}`)
   }
 }
 
 export { createSectionStore, createSectionRequestHandlers } from './sections.mjs'
+export { createUnreadStore, createUnreadRequestHandlers } from './unread.mjs'
 export { createFolderStore, createFolderRequestHandlers, createContentSearch, createContentSearchHandler, hostRequestFence, createLibraryRequestHandlers, listTrash, restoreTrashSafely, trashSessionSafely, previewSession }
 export { vaultArchiveSession, vaultList, vaultMigrateSessions, vaultRestoreSession } from './vault.mjs'
 export { createArchiveRequestHandlers, searchArchivedSessions, restoreArchivedSession, reconcileDeletedArchive } from './archive-manager.mjs'

@@ -4,6 +4,7 @@ import { normalizeConfig, libraryRows, paginateRows, groupedLibraryRows, mergeVa
 import { installSidebar } from './sidebar.mjs';
 import { createFolderStore } from './folders.mjs';
 import { installListCoalesce } from './list-coalesce.mjs';
+import { createUnreadStore } from './unread-store.mjs';
 import { emptySectionState, normalizeSectionState, reconcileSections, activateSession, deactivateSession, refreshSession, removeSession, rememberActiveView, runDemotions, DEMOTE_INTERVAL, INACTIVITY_THRESHOLD } from './section-model.mjs';
 
 // Install at module scope (factory call), which precedes apply() and therefore
@@ -696,7 +697,13 @@ export function installLibrary(ctx, React) {
   // The folder store is only refreshed when the library dialog opens; passing
   // it to the sidebar would leave folders.loading=true forever and hide every
   // row. Sections group by workspace (spec Q10), so no folder state is needed.
-  installSidebar(ctx, React, { openLibrary, useConfig, onConfigChange: setConfig, workspaceRequest, useSessionErrors, useSections, sectionActions });
+  // Durable completion-unread dots. The host owns the state; this client keeps
+  // a local copy for instant paint and mirrors every mark/read back, so a reply
+  // that landed while the tab was closed still lights up and reading a session
+  // on another device clears it here too.
+  const unreadStore = createUnreadStore({ request, storage: typeof localStorage === 'undefined' ? undefined : localStorage });
+  ctx.effect(() => unreadStore.start(), 'session-library unread sync');
+  installSidebar(ctx, React, { unread: unreadStore, openLibrary, useConfig, onConfigChange: setConfig, workspaceRequest, useSessionErrors, useSections, sectionActions });
   // The official sidebar "More" menu content is the sidebar.panellist.actions
   // LIST slot; the official entry-customization rows (browse/create plugins)
   // never render the panel entries the slot owner passes, so panels folded
