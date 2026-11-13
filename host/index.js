@@ -1,5 +1,5 @@
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { createArchiveRequestHandlers, searchArchivedSessions } from './archive-manager.mjs'
 import { hostRequestFence } from './request-fence.mjs'
 import { createLibraryRequestHandlers, createVaultRequestHandlers } from './routes.mjs'
@@ -12,7 +12,8 @@ import { createFolderStore, createFolderRequestHandlers } from './folders.mjs'
 import { createSectionStore, createSectionRequestHandlers } from './sections.mjs'
 import { createUnreadStore, createUnreadRequestHandlers } from './unread.mjs'
 import { createDocumentReader } from './documents.mjs'
-import { createVaultTools, createVaultTranscriptReader, VAULT_PROMPT_TEXT } from './tools.mjs'
+import { createSessionTools, createVaultTranscriptReader, createLiveTranscriptReader, SESSION_PROMPT_TEXT } from './tools.mjs'
+import { createLiveCatalog } from './catalog.mjs'
 
 export const name = 'dsh-session-library'
 export const inject = ['webServer', 'sessionPersistence', 'sessions', 'agents', 'workspaceRegistry', 'tools', 'systemPrompt']
@@ -89,24 +90,30 @@ export function apply(ctx, config = {}) {
   })
   if (ctx.tools && ctx.systemPrompt) {
     const vaultRoot = join(options.dshHome, 'history-vault')
+    const projectionRoot = resolve(options.projectionRoot ?? join(options.dshHome, 'storages', 'session_projcache', 'sessions'))
     const listVault = () => vaultList(options)
+    const listLive = createLiveCatalog({ getSessionQuery: () => ctx.get('sessionQuery'), projectionRoot })
     const restoreVault = async sessionId => {
       const result = await vaultRestoreSession(deps, options, sessionId)
       if (result?.ok !== true) throw new Error(result?.error?.message ?? 'vault restore failed')
       return result.value
     }
     const readVaultTranscript = createVaultTranscriptReader({ vaultRoot, list: listVault })
-    const vaultTools = createVaultTools({ list: listVault, restore: restoreVault, readTranscript: readVaultTranscript })
+    const readLiveTranscript = createLiveTranscriptReader({ getPersistence: () => ctx.sessionPersistence })
+    const sessionTools = createSessionTools({
+      listLive, listVault, restore: restoreVault,
+      readLive: readLiveTranscript, readVault: readVaultTranscript,
+    })
     ctx.effect(() => {
-      const disposers = vaultTools.map(tool => ctx.tools.register(tool))
+      const disposers = sessionTools.map(tool => ctx.tools.register(tool))
       return () => { for (const dispose of disposers) dispose() }
-    }, 'dsh-session-library: vault tools')
+    }, 'dsh-session-library: session tools')
     ctx.effect(() => ctx.systemPrompt.section({
       name: 'plugin:session-library:vault',
       order: 952,
-      text: VAULT_PROMPT_TEXT,
+      text: SESSION_PROMPT_TEXT,
       interpolate: false,
-    }), 'dsh-session-library: vault guidance')
+    }), 'dsh-session-library: session guidance')
   }
   for (const [path, handler] of [
     ['search', searchHandler], ['archive-search', archive.search], ['trash', handlers.trash],

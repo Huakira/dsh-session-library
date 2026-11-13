@@ -1,7 +1,7 @@
 {
   "name": "dsh-session-library",
-  "version": "0.2.15",
-  "description": "Lightweight recent-session sidebar and a searchable, paginated session library with recoverable cleanup for DSH",
+  "version": "0.3.0",
+  "description": "Lightweight recent-session sidebar and a searchable, paginated session library with unified live+vault search and recoverable cleanup for DSH",
   "type": "module",
   "license": "MIT",
   "main": "./host/index.js",
