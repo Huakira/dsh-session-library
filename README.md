@@ -40,7 +40,7 @@
 支持基线：DeepSeek Harness `0.2.2-rc.1`，Node.js `>=24.9.0`。
 
 ```sh
-dsh plugin --profile web add @huakirax/session-library
+dsh plugin --profile web add @huakirax/dsh-session-library
 ```
 
 开发安装：
